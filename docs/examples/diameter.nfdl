@@ -1,0 +1,66 @@
+// ============================================================================
+// Diameter — grouped AVP, match -> tagged union (C6), dynamic 4-byte padding
+// Demonstrates: u24, conditional field (vendor_id), ternary, match producing
+// distinct branch layouts (union), modular padding arithmetic proven by the
+// interval analyzer's modulo axiom, stream mode message framing.
+// ============================================================================
+
+protocol Diameter {
+    meta {
+        endian = big;
+        mode   = stream;
+        eof    = on_close;
+    }
+
+    message AVP {
+        code:    u32;
+        flags:   u8;
+        let v_bit = (flags >> 7) & 0x01;
+        length:  u24;
+        validate length >= 8 -> "AVP length < 8";
+
+        vendor_id: u32 if v_bit == 1;                 // Option<u32>
+
+        let hdr_len     = (v_bit == 1) ? 12 : 8;      // ternary
+        let payload_len = length - hdr_len;           // runtime-checked >= 0 (C5)
+
+        // C6: match yields a tagged union; branches have distinct layouts.
+        match code {
+            case 284 => {
+                // Grouped AVP: recursively parse the inner AVP list.
+                let g_start = __current_offset;
+                loop grouped
+                    while (__current_offset - g_start) < payload_len
+                {
+                    inner: AVP;
+                }
+            }
+            default => {
+                data: bytes[payload_len];
+            }
+        }
+
+        // declarative 4-byte alignment padding: (4 - length%4) % 4
+        // modular expr -> proven [0,3] by the verifier modulo axiom.
+        let pad_len = (4 - (length % 4)) % 4;
+        padding: bytes[pad_len];
+    }
+
+    message Message {
+        version:  u8;
+        length:   u24;
+        flags:    u8;
+        cmd_code: u24;
+        app_id:   u32;
+        hop_id:   u32;
+        end_id:   u32;
+
+        let msg_payload_len = length - 20;            // runtime-checked
+        let start = __current_offset;
+        loop avps
+            while (__current_offset - start) < msg_payload_len
+        {
+            a: AVP;
+        }
+    }
+}

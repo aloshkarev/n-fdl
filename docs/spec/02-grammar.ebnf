@@ -1,0 +1,181 @@
+(* ============================================================================
+   N-FDL Grammar v1  (EBNF, ISO/IEC 14977-ish notation)
+   ----------------------------------------------------------------------------
+   Notation:
+     A   B     concatenation
+     A | B     alternation (ordered choice in parser)
+     [ A ]     optional (0 or 1)
+     { A }     repetition (0 or more)
+     ( A )     grouping
+     "lit"     terminal literal
+     UPPER     lexical token from 01-lexical.md (IDENT, INT, STRING, BOOL)
+   ----------------------------------------------------------------------------
+   This grammar realises ADR-002 (corrections C1-C8). It is LL(2)-parseable:
+   field-vs-let-vs-validate disambiguated by leading keyword; the only 2-token
+   lookahead is "IDENT ':'" (field) vs bare expression contexts (none at stmt
+   level, so effectively LL(1)).
+   ============================================================================ *)
+
+(* ----- 1. Top level --------------------------------------------------------*)
+
+Module        = { ProtocolDecl } ;
+
+ProtocolDecl  = "protocol" IDENT "{" MetaDecl { TopItem } "}" ;
+
+TopItem       = MessageDecl
+              | SessionDecl
+              | BindDecl ;
+
+(* ----- 2. Meta -------------------------------------------------------------*)
+
+MetaDecl      = "meta" "{" { MetaEntry } "}" ;
+
+MetaEntry     = "endian" "=" ( "big" | "little" ) ";"
+              | "mode"   "=" ( "stream" | "datagram" ) ";"
+              | "eof"    "=" EofSource ";" ;          (* only meaningful in stream *)
+
+EofSource     = "on_fin"
+              | "on_close"
+              | "by_plugin" "(" STRING ")" ;
+
+(* ----- 3. Messages ---------------------------------------------------------*)
+
+MessageDecl   = "message" IDENT "{" { Statement } "}" ;
+
+Statement     = FieldStmt
+              | LetStmt
+              | ValidateStmt
+              | MatchStmt
+              | LoopStmt ;
+
+(* ----- 3.1 Field -----------------------------------------------------------*)
+
+FieldStmt     = IDENT ":" Type [ "if" Expr ] ";" ;     (* C-conditional field => Option<T> *)
+
+(* ----- 3.2 Let (immutable binding; pure expr) ------------------------------*)
+
+LetStmt       = "let" IDENT "=" Expr ";" ;
+
+(* ----- 3.3 Validate (refinement; pure pred; no side effects) --------------*)
+
+ValidateStmt  = "validate" Expr "->" STRING ";" ;
+
+(* ----- 3.4 Match (ordered choice; produces tagged union; lookahead 0) -----*)
+(* C6: each arm may declare a distinct layout; result is union{tag,...}.       *)
+
+MatchStmt     = "match" Expr "{" MatchArm { MatchArm } [ DefaultArm ] "}" ;
+
+MatchArm      = "case" Expr "=>" "{" { Statement } "}" ;
+DefaultArm    = "default"  "=>" "{" { Statement } "}" ;
+
+(* ----- 3.5 Loop (C2: carry/next; C2-progress: >=1 byte/iter) --------------*)
+
+LoopStmt      = "loop" IDENT
+                { CarryDecl }                           (* zero or more loop-carried accumulators *)
+                "while" Expr
+                "{" { Statement } { NextStmt } "}" ;
+
+CarryDecl     = "carry" IDENT ":" Type "=" Expr ;       (* init from C_loc / outer carries *)
+NextStmt      = "next" IDENT "=" Expr ";" ;             (* update carry for next iteration   *)
+
+(* ----- 4. Types ------------------------------------------------------------*)
+
+Type          = ScalarType
+              | BitfieldType
+              | BytesType
+              | InvokeType
+              | IDENT ;                                 (* nested message type *)
+
+ScalarType    = "u8" | "u16" | "u24" | "u32" | "u48" | "u64"
+              | "i8" | "i16" | "i32" | "i64"
+              | "u16le" | "u24le" | "u32le" | "u48le" | "u64le"
+              | "u16be" | "u24be" | "u32be" | "u48be" | "u64be"
+              | "i16le" | "i32le" | "i64le"
+              | "i16be" | "i32be" | "i64be"
+              | EndianScalarType
+              | "bool"
+              | "str" | "opaque" ;                      (* str/opaque only as invoke results *)
+EndianScalarType
+              = ( "u16" | "u24" | "u32" | "u48" | "u64"
+                | "i16" | "i32" | "i64" )
+                "(" "endian" "=" Expr ")" ;              (* dynamic per-field endian, v1.5 *)
+
+BitfieldType  = "bitfield" "{" INT "}" ;                (* 1..=64 bits *)
+
+BytesType     = "bytes" "[" BytesLen "]" ;
+BytesLen      = Expr                                    (* dependent length, C_loc *)
+              | ".."                                    (* C1: rest-of-message      *)
+              | "EOF"                                   (* C1: stream-end (mode=stream only) *)
+              | "stream" ;                              (* chunked stream emission, mode=stream only *)
+
+InvokeType    = "invoke" "(" STRING { "," Expr } ")" ;  (* FFI; result type from manifest *)
+
+(* ----- 5. Sessions / EFSM --------------------------------------------------*)
+
+SessionDecl   = "state_machine" IDENT "{"
+                  "key" "=" KeyExpr ";"
+                  StateDecl { StateDecl }
+                "}" ;
+
+KeyExpr       = "(" KeyComponent { "," KeyComponent } ")"
+              | KeyComponent ;
+KeyComponent  = "bidir" "(" Expr "," Expr ")"           (* C4: canonical bidirectional key *)
+              | "bidir_tuple" "(" Endpoint "," Endpoint ")" (* C10: canonical endpoint key *)
+              | Expr ;
+Endpoint      = "(" Expr "," Expr { "," Expr } ")" ;    (* endpoint tuple sorted atomically *)
+
+StateDecl     = "state" IDENT "{" { Transition } "}" ;
+
+Transition    = "on" IDENT [ "guard" Expr ] "->" IDENT
+                "{" { Action } "}" ";" ;
+
+Action        = "emit" IDENT ";"
+              | "set" IDENT "=" Expr ";"
+              | "start_timer" "(" IDENT "," Expr ")" ";"   (* v1.5 *)
+              | "cancel_timer" "(" IDENT ")" ";" ;          (* v1.5 *)
+
+(* ----- 6. Bind (layering; C7 recursion bounded at runtime) ----------------*)
+
+BindDecl      = "bind" IDENT "payload" "to" IDENT "when" Expr ";" ;
+(*               ^outer protocol/message   ^inner            ^predicate over outer C_loc *)
+
+(* ----- 7. Expressions (pure) ----------------------------------------------*)
+(* Precedence encoded by rule nesting; see 01-lexical.md §6.1.                *)
+
+Expr          = Ternary ;
+
+Ternary       = Coalesce [ "?" Expr ":" Expr ] ;        (* right-assoc *)
+
+Coalesce      = LogicOr { "??" LogicOr } ;              (* Option[T] -> T default *)
+LogicOr       = LogicAnd { "||" LogicAnd } ;
+LogicAnd      = Equality { "&&" Equality } ;
+Equality      = BitOr { ( "==" | "!=" ) BitOr } ;
+BitOr         = BitXor   { "|"  BitXor } ;
+BitXor        = BitAnd   { "^"  BitAnd } ;
+BitAnd        = Relational { "&"  Relational } ;
+Relational    = Shift { ( "<" | "<=" | ">" | ">=" ) Shift } ;
+Shift         = Additive { ( "<<" | ">>" ) Additive } ;
+Additive      = Multiplicative { ( "+" | "-" ) Multiplicative } ;
+Multiplicative= Unary { ( "*" | "/" | "%" ) Unary } ;
+Unary         = ( "!" | "~" | "-" ) Unary
+              | Postfix ;
+Postfix       = Primary { "." IDENT } ;                 (* qualified: IPv4.src, ext.next_ext_type *)
+
+Primary       = INT
+              | BOOL
+              | STRING
+              | Builtin
+              | IDENT                                   (* field / let / carry reference *)
+              | InvokeExpr                              (* invoke(...) as value           *)
+              | "(" Expr ")" ;
+
+InvokeExpr    = "invoke" "(" STRING { "," Expr } ")" ;
+
+Builtin       = "__root_buffer"
+              | "__current_offset"
+              | "__root_offset"
+              | "__rem"
+              | "__count"
+              | SessionProjection ;
+SessionProjection
+              = "__session" "(" STRING ")" ;            (* read-only session projection, verifier-gated *)

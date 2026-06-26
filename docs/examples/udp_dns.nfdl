@@ -1,0 +1,65 @@
+// ============================================================================
+// UDP + DNS — nesting, multiplexing bind, FFI plugin (DNS pointer decompression)
+// Demonstrates: dependent payload, bidirectional bind predicate, invoke() with
+// root buffer + absolute offset (C8), loop with carry-free counting via __count.
+// ============================================================================
+
+protocol UDP {
+    meta {
+        endian = big;
+        mode   = datagram;
+    }
+
+    message Datagram {
+        src_port: u16;
+        dst_port: u16;
+        length:   u16;
+        validate length >= 8 -> "UDP length must include 8-byte header";
+        checksum: u16;
+        // length-8 proven non-negative by the validate above
+        payload:  bytes[length - 8];
+    }
+}
+
+protocol DNS {
+    meta {
+        endian = big;
+        mode   = datagram;
+    }
+
+    // A single question entry. qname uses the decompression plugin, which is
+    // allowed to random-access the ROOT buffer to follow 0xC0 compression
+    // pointers. We pass __root_buffer + __root_offset (absolute, per C8).
+    // OPEN DESIGN POINT (tracked): a compressed DNS name both (a) yields a
+    // string and (b) consumes a variable number of on-wire bytes in the LOCAL
+    // stream. Per semantics §3.6 invoke() does NOT advance the local offset.
+    // Resolution for v1: dns_decompress returns a struct { name: str, wire_len: u16 }
+    // and the consumed length is applied via a following dependent skip field.
+    // Surface form below makes the consumption explicit and DAG-visible.
+    message Query {
+        let dec   = invoke("dns_decompress", __root_buffer, __root_offset); // {name,wire_len}
+        qname:    bytes[dec.wire_len];   // consume the on-wire encoded name (zero-copy)
+        qtype:    u16;
+        qclass:   u16;
+    }
+
+    message DnsPacket {
+        tx_id:    u16;
+        flags:    u16;
+        qdcount:  u16;
+        ancount:  u16;
+        nscount:  u16;
+        arcount:  u16;
+
+        // read exactly qdcount questions; __count is the iteration index.
+        // progress is guaranteed: each Query consumes >= qtype+qclass bytes.
+        loop queries
+            while __count < qdcount
+        {
+            q: Query;
+        }
+    }
+
+    // UDP multiplexing: port 53 in either direction -> DNS
+    bind UDP payload to DnsPacket when src_port == 53 || dst_port == 53;
+}

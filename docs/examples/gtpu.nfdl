@@ -1,0 +1,56 @@
+// ============================================================================
+// GTP-U — L3 tunneling, chained extension headers, recursive layer closure
+// Demonstrates: THE C2 FIX — loop-carried `carry curr_type` + `next` instead of
+// the illegal `let`-mutation; conditional optional fields; bytes[..] rest-of-
+// slice (datagram); C7 recursive bind (IPv4 over GTP) with runtime depth guard.
+// ============================================================================
+
+protocol GTPU {
+    meta {
+        endian = big;
+        mode   = datagram;
+    }
+
+    message ExtHeader {
+        length:        u8;
+        validate length > 0 -> "Ext header length must be > 0";
+        // content length = length*4 - 2 (the length/next_type bytes).
+        // (length*4)-2 is non-linear -> runtime BOUNDS_CHECK in v1 (C5).
+        content:       bytes[(length * 4) - 2];
+        next_ext_type: u8;
+    }
+
+    message TunnelMessage {
+        flags:  bitfield{8};
+        let e_flag  = (flags >> 2) & 0x01;
+        let s_flag  = (flags >> 1) & 0x01;
+        let pn_flag = flags & 0x01;
+
+        type:   u8;
+        length: u16;
+        teid:   u32;
+
+        let has_opt = (e_flag == 1) || (s_flag == 1) || (pn_flag == 1);
+        seq_num:       u16 if has_opt;        // Option<u16>
+        npdu_num:      u8  if has_opt;
+        next_ext_type: u8  if has_opt;
+
+        // C2 FIX: chained ext-header list via loop-carried accumulator.
+        // `next_ext_type` is Option (read only when has_opt); coalesce to 0.
+        loop extensions
+            carry curr_type: u8 = (has_opt == true) ? next_ext_type : 0
+            while curr_type != 0
+        {
+            ext: ExtHeader;
+            next curr_type = ext.next_ext_type;     // carry update on iter boundary
+        }
+
+        // remainder of this datagram slice is the tunneled payload
+        payload: bytes[..];
+    }
+
+    // C7: recursive layer closure — tunneled payload is itself IPv4.
+    // Dispatcher enforces max_layer_depth + payload-shrink invariant to bound
+    // infinite encapsulation (GTP-in-IP-in-GTP-...).
+    bind IPv4 payload to TunnelMessage when type == 255;
+}

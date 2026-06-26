@@ -1,0 +1,16 @@
+[package]
+name = "nfdl-fuzz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nfdl-syntax = { path = "../nfdl-syntax" }
+nfdl-runtime = { path = "../nfdl-runtime" }
+proptest = "1.4"
+
+[[bin]]
+name = "fuzz_parser"
+path = "src/fuzz_parser.rs"
+
+# differential is currently test-only skeleton (see differential.rs tests)
+# To use as bin, add main() or run via `cargo test -p nfdl-fuzz --test differential`

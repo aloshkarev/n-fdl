@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "crates/nfdl-fuzz",
+    "crates/nfdl-syntax",
+    "crates/nfdl-types",
+    "crates/nfdl-verify",
+    "crates/nfdl-ir",
+    "crates/nfdl-bytecode",
+    "crates/nfdl-vm",
+    "crates/nfdl-runtime",
+    "crates/nfdl-diag",
+    "crates/nfdl-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Aleksandr Loshkarev <mailbox@aloshkarev.com>"]
+
+[workspace.dependencies]
+# общие зависимости позже

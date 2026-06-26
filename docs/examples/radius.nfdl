@@ -1,0 +1,57 @@
+// ============================================================================
+// RADIUS — attribute TLV loop, request/response pairing via FSM
+// Demonstrates: nested message in loop, loop bounded by consumed-byte window,
+// set in session context (req_auth), bidir+identifier correlation key (C4).
+// ============================================================================
+
+protocol RADIUS {
+    meta {
+        endian = big;
+        mode   = datagram;
+    }
+
+    message Attribute {
+        type:   u8;
+        length: u8;
+        validate length >= 2 -> "RADIUS TLV length < 2";
+        value:  bytes[length - 2];     // length-2 proven >= 0 by validate
+    }
+
+    message AccessMessage {
+        code:          u8;
+        identifier:    u8;
+        length:        u16;
+        validate length >= 20 -> "RADIUS length < 20";
+        authenticator: bytes[16];
+
+        let attrs_len    = length - 20;          // proven >= 0
+        let start_offset = __current_offset;
+
+        // consume attributes until we've read attrs_len bytes from the start.
+        // each Attribute consumes >= 2 bytes -> progress guaranteed (C2-progress).
+        loop attrs
+            while (__current_offset - start_offset) < attrs_len
+        {
+            attr: Attribute;
+        }
+    }
+
+    state_machine AuthDialog {
+        // C4: bidir over ports + RADIUS identifier ties request to response
+        key = (bidir(UDP.src_port, UDP.dst_port), identifier);
+
+        state IDLE {
+            on AccessMessage guard (code == 1) -> PENDING {      // Access-Request
+                set req_auth = authenticator;                   // copy into C_sess
+            };
+        }
+        state PENDING {
+            on AccessMessage guard (code == 2) -> IDLE {         // Access-Accept
+                emit RADIUS_ACCEPT;
+            };
+            on AccessMessage guard (code == 3) -> IDLE {         // Access-Reject
+                emit RADIUS_REJECT;
+            };
+        }
+    }
+}

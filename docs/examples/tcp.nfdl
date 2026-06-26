@@ -1,0 +1,72 @@
+// ============================================================================
+// TCP — byte stream, bitfields, FSM connection tracking
+// Demonstrates: bitfield{k} cross-byte, derived let flags, conditional options,
+// mode=stream + bytes[EOF] (consume reassembled L7 payload), EFSM with bidir key.
+//
+// NOTE on layering: the TCP *segment header* is fixed-layout and parsed like a
+// datagram. mode=stream applies to the L7 PAYLOAD handed downstream. bytes[EOF]
+// here means "everything reassembly delivers for this direction until FIN".
+// ============================================================================
+
+protocol TCP {
+    meta {
+        endian = big;
+        mode   = stream;
+        eof    = on_fin;        // C1: declare EOF source for bytes[EOF]
+    }
+
+    message Segment {
+        src_port:    u16;
+        dst_port:    u16;
+        seq:         u32;
+        ack:         u32;
+
+        // bitfields may cross byte boundaries; sum here = 4+3+9 = 16 bits (aligned)
+        data_offset: bitfield{4};
+        validate data_offset >= 5 -> "TCP data offset < 5 (20 bytes)";
+        reserved:    bitfield{3};
+        flags:       bitfield{9};
+
+        let is_fin = flags & 0x01;
+        let is_syn = (flags >> 1) & 0x01;
+        let is_ack = (flags >> 4) & 0x01;
+
+        window:      u16;
+        checksum:    u16;
+        urg_ptr:     u16;
+
+        let hdr_len = data_offset * 4;
+        // options present only when header longer than 20 bytes; hdr_len-20 proven
+        // >= 0 by validate data_offset >= 5  =>  hdr_len >= 20
+        options:     bytes[hdr_len - 20] if hdr_len > 20;
+
+        // L7 payload: whatever the reassembly engine delivers until EOF (FIN)
+        payload:     bytes[EOF];
+    }
+
+    state_machine Connection {
+        // C10: sort the endpoint tuple atomically so IP/port pairs stay coupled.
+        key = bidir_tuple((IPv4.src, src_port), (IPv4.dst, dst_port));
+
+        state CLOSED {
+            on Segment guard (is_syn == 1 && is_ack == 0) -> SYN_SENT {
+                emit TCP_SYN_SEEN;
+            };
+        }
+        state SYN_SENT {
+            on Segment guard (is_syn == 1 && is_ack == 1) -> ESTABLISHED {
+                emit TCP_ESTABLISHED;
+            };
+        }
+        state ESTABLISHED {
+            on Segment guard (is_fin == 1) -> FIN_WAIT {
+                emit TCP_CLOSING;
+            };
+        }
+        state FIN_WAIT {
+            on Segment guard (is_ack == 1) -> CLOSED {
+                emit TCP_CLOSED;
+            };
+        }
+    }
+}

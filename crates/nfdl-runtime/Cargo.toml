@@ -1,0 +1,8 @@
+[package]
+name = "nfdl-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nfdl-syntax = { path = "../nfdl-syntax" }
+bytes = "1"
