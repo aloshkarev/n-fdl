@@ -128,7 +128,10 @@ impl<'a> Parser<'a> {
                     }
                     Some(BinOp::Eq)
                 }
-                // We may add Ne later; for now treat != via two tokens if needed
+                Token::Ne => {
+                    self.advance();
+                    Some(BinOp::Ne)
+                }
                 _ => None,
             };
             if let Some(op) = op {
@@ -342,12 +345,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
-        match &self.current {
+        let mut atom = match &self.current {
             Token::Ident(s) => {
                 let n = s.clone();
                 self.advance();
-                // Support function calls: bidir_tuple(...), bidir(...)
-                if self.current == Token::LParen {
+                if n == "true" {
+                    Expr::Int(1)
+                } else if n == "false" {
+                    Expr::Int(0)
+                } else if self.current == Token::LParen {
                     self.advance();
                     let mut args = vec![];
                     if self.current != Token::RParen {
@@ -363,28 +369,437 @@ impl<'a> Parser<'a> {
                     if self.current == Token::RParen {
                         self.advance();
                     }
-                    return Ok(Expr::Call { name: n, args });
+                    Expr::Call { name: n, args }
+                } else {
+                    Expr::Ident(n)
                 }
-                Ok(Expr::Ident(n))
             }
             Token::Int(v) => {
                 let v = *v;
                 self.advance();
-                Ok(Expr::Int(v))
+                Expr::Int(v)
             }
             Token::LParen => {
                 self.advance();
-                let e = self.parse_expr()?;
+                // Tuple if comma-separated, else grouping.
+                let mut elems = vec![self.parse_expr()?];
+                while self.current == Token::Comma {
+                    self.advance();
+                    elems.push(self.parse_expr()?);
+                }
                 if self.current == Token::RParen {
                     self.advance();
                 }
-                Ok(e)
+                if elems.len() == 1 {
+                    elems.into_iter().next().unwrap()
+                } else {
+                    Expr::Tuple(elems)
+                }
             }
-            _ => Err(ParseError::Syntax(format!(
-                "bad primary: {:?}",
-                self.current
-            ))),
+            _ => {
+                return Err(ParseError::Syntax(format!(
+                    "bad primary: {:?}",
+                    self.current
+                )));
+            }
+        };
+        // Postfix field access: base.field (e.g. IPv4.src, dec.wire_len)
+        while self.current == Token::Dot {
+            self.advance();
+            if let Token::Ident(f) = &self.current {
+                let fname = f.clone();
+                self.advance();
+                atom = Expr::Field(Box::new(atom), fname);
+            } else {
+                break;
+            }
         }
+        Ok(atom)
+    }
+
+    /// Parse a field type. Handles scalars `u8`/`u16`/`u24`/`u32`,
+    /// `bytes[expr]` / `bytes[EOF]` / `bytes[stream]` / `bytes[..]` (rest),
+    /// `bitfield{k}`, and bare-ident `MessageRef`.
+    fn parse_type(&mut self) -> NfdlType {
+        match &self.current {
+            Token::Ident(t) if t == "u8" => {
+                self.advance();
+                NfdlType::U8
+            }
+            Token::Ident(t) if t == "u16" => {
+                self.advance();
+                NfdlType::U16
+            }
+            Token::Ident(t) if t == "u24" => {
+                self.advance();
+                NfdlType::U24
+            }
+            Token::Ident(t) if t == "u32" => {
+                self.advance();
+                NfdlType::U32
+            }
+            Token::Ident(t) if t == "bytes" => {
+                self.advance();
+                if self.current == Token::LBracket {
+                    self.advance();
+                    // `bytes[EOF]` / `bytes[stream]` / `bytes[..]` / `bytes[expr]`
+                    let ty = match &self.current {
+                        Token::Ident(s) if s == "EOF" => {
+                            self.advance();
+                            NfdlType::BytesEof
+                        }
+                        Token::Ident(s) if s == "stream" => {
+                            self.advance();
+                            NfdlType::BytesStream
+                        }
+                        Token::Dot => {
+                            // `bytes[..]` — rest of the current slice
+                            self.advance();
+                            if self.current == Token::Dot {
+                                self.advance();
+                            }
+                            NfdlType::BytesRest
+                        }
+                        _ => {
+                            let len_expr = self.parse_expr().unwrap_or(Expr::Int(0));
+                            NfdlType::Bytes { len: len_expr }
+                        }
+                    };
+                    if self.current == Token::RBracket {
+                        self.advance();
+                    }
+                    ty
+                } else {
+                    NfdlType::BytesRest
+                }
+            }
+            Token::Ident(t) if t == "bitfield" => {
+                self.advance();
+                let bits = if self.current == Token::LBrace {
+                    self.advance();
+                    let b = if let Token::Int(v) = &self.current {
+                        let v = *v as u8;
+                        self.advance();
+                        v
+                    } else {
+                        0
+                    };
+                    if self.current == Token::RBrace {
+                        self.advance();
+                    }
+                    b
+                } else {
+                    0
+                };
+                NfdlType::Bitfield { bits }
+            }
+            Token::Ident(t) => {
+                let tname = t.clone();
+                self.advance();
+                NfdlType::MessageRef(tname)
+            }
+            _ => {
+                // Unknown — consume one token to make progress, default to u8.
+                self.advance();
+                NfdlType::U8
+            }
+        }
+    }
+
+    /// Parse a `match`-arm or message body block (the `{ ... }` contents, with
+    /// `{` already consumed) up to and including the closing `}`. Handles
+    /// `let`, `loop` (with optional `carry`/`while`/`next`), standalone
+    /// `validate`, nested `match`, and plain `field: type;`.
+    fn parse_arm_body(&mut self) -> (Vec<Field>, Vec<Let>, Vec<Loop>, Vec<Validate>, Vec<Match>) {
+        let mut fields = vec![];
+        let mut lets = vec![];
+        let mut loops = vec![];
+        let mut validates = vec![];
+        let mut matches = vec![];
+        let mut body_seq: u32 = 0;
+
+        while self.current != Token::RBrace && self.current != Token::Eof {
+            if self.current == Token::Validate {
+                self.advance();
+                let vexpr = self.parse_expr().unwrap_or(Expr::Int(1));
+                let message = if self.current == Token::Arrow {
+                    self.advance();
+                    if let Token::String(s) = &self.current {
+                        let m = s.clone();
+                        self.advance();
+                        m
+                    } else {
+                        "constraint".into()
+                    }
+                } else {
+                    "constraint".into()
+                };
+                let o = body_seq; body_seq += 1;
+                validates.push(Validate {
+                    expr: vexpr,
+                    message,
+                    order: o,
+                });
+                while self.current != Token::Semicolon
+                    && self.current != Token::RBrace
+                    && self.current != Token::Eof
+                {
+                    self.advance();
+                }
+                if self.current == Token::Semicolon {
+                    self.advance();
+                }
+                continue;
+            }
+            if let Token::Ident(kw) = &self.current {
+                let kw = kw.clone();
+                self.advance();
+                if kw == "match" {
+                    let tag = self.parse_expr().unwrap_or(Expr::Int(0));
+                    if self.current == Token::LBrace {
+                        self.advance();
+                    }
+                    let mut arms = vec![];
+                    while self.current != Token::RBrace && self.current != Token::Eof {
+                        let case_val = match &self.current {
+                            Token::Ident(d) if d == "default" => {
+                                self.advance();
+                                None
+                            }
+                            Token::Ident(c) if c == "case" => {
+                                self.advance();
+                                if let Token::Int(v) = &self.current {
+                                    let v = *v;
+                                    self.advance();
+                                    Some(v)
+                                } else {
+                                    self.advance();
+                                    Some(0)
+                                }
+                            }
+                            _ => {
+                                self.advance();
+                                None
+                            }
+                        };
+                        if self.current == Token::Arrow {
+                            self.advance();
+                        }
+                        if self.current == Token::LBrace {
+                            self.advance();
+                        }
+                        let (af, al, alp, av, am) = self.parse_arm_body();
+                        arms.push(MatchArm {
+                            case: case_val,
+                            fields: af,
+                            lets: al,
+                            loops: alp,
+                            validates: av,
+                            matches: am,
+                        });
+                        if self.current == Token::Comma {
+                            self.advance();
+                        }
+                    }
+                    if self.current == Token::RBrace {
+                        self.advance();
+                    }
+                    let o = body_seq; body_seq += 1;
+                    matches.push(Match { tag, arms, order: o });
+                    continue;
+                }
+                if kw == "let" {
+                    if let Token::Ident(ln) = &self.current {
+                        let lname = ln.clone();
+                        self.advance();
+                        if self.current == Token::Eq {
+                            self.advance();
+                        }
+                        if let Ok(val) = self.parse_expr() {
+                            let o = body_seq; body_seq += 1;
+                            lets.push(Let {
+                                name: lname,
+                                value: val,
+                                order: o,
+                            });
+                        }
+                        if self.current == Token::Semicolon {
+                            self.advance();
+                        }
+                        continue;
+                    }
+                }
+                if kw == "loop" {
+                    let loop_name = if let Token::Ident(n) = &self.current {
+                        let nn = n.clone();
+                        self.advance();
+                        nn
+                    } else {
+                        "loop".to_string()
+                    };
+                    let mut carries = vec![];
+                    while let Token::Ident(kw2) = &self.current {
+                        if kw2 == "carry" {
+                            self.advance();
+                            let cname = if let Token::Ident(n) = &self.current {
+                                let nn = n.clone();
+                                self.advance();
+                                nn
+                            } else {
+                                String::new()
+                            };
+                            if self.current == Token::Colon {
+                                self.advance();
+                            }
+                            let cty = self.parse_type();
+                            if self.current == Token::Eq {
+                                self.advance();
+                            }
+                            let init = self.parse_expr().unwrap_or(Expr::Int(0));
+                            if self.current == Token::Semicolon {
+                                self.advance();
+                            }
+                            carries.push(Carry {
+                                name: cname,
+                                ty: cty,
+                                init,
+                            });
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Token::Ident(w) = &self.current {
+                        if w == "while" {
+                            self.advance();
+                        }
+                    }
+                    let mut condition = Expr::Int(1);
+                    if self.current != Token::LBrace && self.current != Token::Semicolon {
+                        if let Ok(e) = self.parse_expr() {
+                            condition = e;
+                        }
+                    }
+                    let mut loop_body = vec![];
+                    let mut nexts = vec![];
+                    if self.current == Token::LBrace {
+                        self.advance();
+                    }
+                    while self.current != Token::RBrace && self.current != Token::Eof {
+                        if let Token::Ident(fname) = &self.current {
+                            if fname == "next" {
+                                self.advance();
+                                let nname = if let Token::Ident(n) = &self.current {
+                                    let nn = n.clone();
+                                    self.advance();
+                                    nn
+                                } else {
+                                    String::new()
+                                };
+                                if self.current == Token::Eq {
+                                    self.advance();
+                                }
+                                let nval = self.parse_expr().unwrap_or(Expr::Int(0));
+                                if self.current == Token::Semicolon {
+                                    self.advance();
+                                }
+                                nexts.push(NextStmt {
+                                    name: nname,
+                                    value: nval,
+                                });
+                                continue;
+                            }
+                            let fname = fname.clone();
+                            self.advance();
+                            if self.current == Token::Colon {
+                                self.advance();
+                            }
+                            let ty = self.parse_type();
+                            loop_body.push(Field {
+                                name: fname,
+                                ty,
+                                validate: None,
+                                conditional: None,
+                                order: 0,
+                            });
+                        } else {
+                            self.advance();
+                        }
+                        if self.current == Token::Semicolon {
+                            self.advance();
+                        }
+                    }
+                    if self.current == Token::RBrace {
+                        self.advance();
+                    }
+                    let o = body_seq; body_seq += 1;
+                    loops.push(Loop {
+                        name: loop_name,
+                        carries,
+                        condition,
+                        body: loop_body,
+                        nexts,
+                        order: o,
+                    });
+                    continue;
+                }
+                // plain field: `kw: type;` with optional `validate` / `if`
+                if self.current == Token::Colon {
+                    self.advance();
+                }
+                let ty = self.parse_type();
+                let mut validate = None;
+                if let Token::Ident(v) = &self.current {
+                    if v == "validate" {
+                        self.advance();
+                        let vexpr = self.parse_expr().unwrap_or(Expr::Int(1));
+                        validate = Some(Validate {
+                            expr: vexpr,
+                            message: "constraint".into(),
+                            order: 0,
+                        });
+                        while self.current != Token::Semicolon
+                            && self.current != Token::RBrace
+                            && self.current != Token::Eof
+                        {
+                            self.advance();
+                        }
+                    }
+                }
+                let mut conditional = None;
+                if let Token::Ident(v) = &self.current {
+                    if v == "if" {
+                        self.advance();
+                        if let Ok(e) = self.parse_expr() {
+                            conditional = Some(e);
+                        }
+                        while self.current != Token::Semicolon
+                            && self.current != Token::RBrace
+                            && self.current != Token::Eof
+                        {
+                            self.advance();
+                        }
+                    }
+                }
+                let o = body_seq; body_seq += 1;
+                fields.push(Field {
+                    name: kw,
+                    ty,
+                    validate,
+                    conditional,
+                    order: o,
+                });
+            } else {
+                self.advance();
+            }
+            if self.current == Token::Semicolon {
+                self.advance();
+            }
+        }
+        if self.current == Token::RBrace {
+            self.advance();
+        }
+        (fields, lets, loops, validates, matches)
     }
 
     pub fn parse_state_machine(&mut self) -> Result<StateMachine, ParseError> {
@@ -581,6 +996,7 @@ impl<'a> Parser<'a> {
             name: String::new(),
             endian: "big".to_string(),
             mode: "datagram".to_string(),
+            eof: String::new(),
             messages: vec![],
             binds: vec![],
             state_machines: vec![],
@@ -598,19 +1014,127 @@ impl<'a> Parser<'a> {
                         self.advance();
                     }
                 }
+                Token::Meta => {
+                    self.advance(); // past `meta`
+                    if self.current == Token::LBrace {
+                        self.advance();
+                    }
+                    while self.current != Token::RBrace && self.current != Token::Eof {
+                        match &self.current {
+                            Token::Endian => {
+                                self.advance();
+                                if self.current == Token::Eq {
+                                    self.advance();
+                                }
+                                match &self.current {
+                                    Token::Big => {
+                                        proto.endian = "big".into();
+                                        self.advance();
+                                    }
+                                    Token::Ident(e) => {
+                                        proto.endian = e.clone();
+                                        self.advance();
+                                    }
+                                    _ => {}
+                                }
+                                if self.current == Token::Semicolon {
+                                    self.advance();
+                                }
+                            }
+                            Token::Mode => {
+                                self.advance();
+                                if self.current == Token::Eq {
+                                    self.advance();
+                                }
+                                match &self.current {
+                                    Token::Datagram => {
+                                        proto.mode = "datagram".into();
+                                        self.advance();
+                                    }
+                                    Token::Ident(m) => {
+                                        proto.mode = m.clone();
+                                        self.advance();
+                                    }
+                                    _ => {}
+                                }
+                                if self.current == Token::Semicolon {
+                                    self.advance();
+                                }
+                            }
+                            Token::Ident(k) if k == "eof" => {
+                                self.advance();
+                                if self.current == Token::Eq {
+                                    self.advance();
+                                }
+                                match &self.current {
+                                    Token::Ident(v) => {
+                                        proto.eof = v.clone();
+                                        self.advance();
+                                    }
+                                    _ => {}
+                                }
+                                // tolerate by_plugin("...") form
+                                if self.current == Token::LParen {
+                                    self.advance();
+                                    if let Token::String(_) = &self.current {
+                                        self.advance();
+                                    }
+                                    if self.current == Token::RParen {
+                                        self.advance();
+                                    }
+                                }
+                                if self.current == Token::Semicolon {
+                                    self.advance();
+                                }
+                            }
+                            _ => {
+                                self.advance();
+                            }
+                        }
+                    }
+                    if self.current == Token::RBrace {
+                        self.advance();
+                    }
+                }
                 Token::Endian => {
                     self.advance();
-                    if let Token::Ident(e) = &self.current {
-                        proto.endian = e.clone();
+                    if self.current == Token::Eq {
+                        self.advance();
                     }
-                    self.advance();
+                    match &self.current {
+                        Token::Big => {
+                            proto.endian = "big".into();
+                            self.advance();
+                        }
+                        Token::Ident(e) => {
+                            proto.endian = e.clone();
+                            self.advance();
+                        }
+                        _ => {}
+                    }
+                    if self.current == Token::Semicolon {
+                        self.advance();
+                    }
                 }
                 Token::Mode => {
                     self.advance();
-                    if let Token::Ident(m) = &self.current {
-                        proto.mode = m.clone();
+                    if self.current == Token::Eq {
+                        self.advance();
                     }
-                    self.advance();
+                    match &self.current {
+                        Token::Datagram => {
+                            proto.mode = "datagram".into();
+                            self.advance();
+                        }
+                        Token::Ident(m) => {
+                            proto.mode = m.clone();
+                            self.advance();
+                        }
+                        _ => {}
+                    }
+                    if self.current == Token::Semicolon {
+                        self.advance();
+                    }
                 }
 
                 Token::Message => {
@@ -630,8 +1154,109 @@ impl<'a> Parser<'a> {
                     let mut fields = vec![];
                     let mut lets = vec![];
                     let mut loops = vec![];
+                    let mut validates = vec![];
+                    let mut matches = vec![];
+                    // Monotonic source-order counter so the emitter can interleave
+                    // fields/lets/loops/validates/matches in the order they were written
+                    // (a field may reference a preceding `let`, and a `let` may reference
+                    // preceding fields).
+                    let mut body_seq: u32 = 0;
 
                     while self.current != Token::RBrace && self.current != Token::Eof {
+                        // Standalone `validate expr -> "msg";` (refinement on prior fields/lets)
+                        if self.current == Token::Validate {
+                            self.advance();
+                            let vexpr = match self.parse_expr() {
+                                Ok(e) => e,
+                                Err(_) => Expr::Int(1),
+                            };
+                            let message = if self.current == Token::Arrow {
+                                self.advance();
+                                if let Token::String(s) = &self.current {
+                                    let m = s.clone();
+                                    self.advance();
+                                    m
+                                } else {
+                                    "constraint".into()
+                                }
+                            } else {
+                                "constraint".into()
+                            };
+                            let o = body_seq; body_seq += 1;
+                            validates.push(Validate {
+                                expr: vexpr,
+                                message,
+                                order: o,
+                            });
+                            while self.current != Token::Semicolon
+                                && self.current != Token::RBrace
+                                && self.current != Token::Eof
+                            {
+                                self.advance();
+                            }
+                            if self.current == Token::Semicolon {
+                                self.advance();
+                            }
+                            continue;
+                        }
+                        // `match <tag> { case N => { ... } default => { ... } }` tagged union (C6)
+                        if let Token::Ident(kw) = &self.current {
+                            if kw == "match" {
+                                self.advance();
+                                let tag = self.parse_expr().unwrap_or(Expr::Int(0));
+                                if self.current == Token::LBrace {
+                                    self.advance();
+                                }
+                                let mut arms = vec![];
+                                while self.current != Token::RBrace && self.current != Token::Eof {
+                                    let case_val = match &self.current {
+                                        Token::Ident(d) if d == "default" => {
+                                            self.advance();
+                                            None
+                                        }
+                                        Token::Ident(c) if c == "case" => {
+                                            self.advance();
+                                            if let Token::Int(v) = &self.current {
+                                                let v = *v;
+                                                self.advance();
+                                                Some(v)
+                                            } else {
+                                                self.advance();
+                                                Some(0)
+                                            }
+                                        }
+                                        _ => {
+                                            self.advance();
+                                            None
+                                        }
+                                    };
+                                    if self.current == Token::Arrow {
+                                        self.advance();
+                                    }
+                                    if self.current == Token::LBrace {
+                                        self.advance();
+                                    }
+                                    let (af, al, alp, av, am) = self.parse_arm_body();
+                                    arms.push(MatchArm {
+                                        case: case_val,
+                                        fields: af,
+                                        lets: al,
+                                        loops: alp,
+                                        validates: av,
+                                        matches: am,
+                                    });
+                                    if self.current == Token::Comma {
+                                        self.advance();
+                                    }
+                                }
+                                if self.current == Token::RBrace {
+                                    self.advance();
+                                }
+                                let o = body_seq; body_seq += 1;
+                                matches.push(Match { tag, arms, order: o });
+                                continue;
+                            }
+                        }
                         if let Token::Ident(kw) = &self.current {
                             let kw = kw.clone();
                             self.advance();
@@ -644,9 +1269,11 @@ impl<'a> Parser<'a> {
                                         self.advance();
                                     }
                                     if let Ok(val) = self.parse_expr() {
+                                        let o = body_seq; body_seq += 1;
                                         lets.push(Let {
                                             name: lname,
                                             value: val,
+                                            order: o,
                                         });
                                     }
                                     if self.current == Token::Semicolon {
@@ -680,24 +1307,7 @@ impl<'a> Parser<'a> {
                                         if self.current == Token::Colon {
                                             self.advance();
                                         }
-                                        let cty = match &self.current {
-                                            Token::Ident(t) if t == "u8" => {
-                                                self.advance();
-                                                NfdlType::U8
-                                            }
-                                            Token::Ident(t) if t == "u16" => {
-                                                self.advance();
-                                                NfdlType::U16
-                                            }
-                                            Token::Ident(t) if t == "u32" => {
-                                                self.advance();
-                                                NfdlType::U32
-                                            }
-                                            _ => {
-                                                self.advance();
-                                                NfdlType::U8
-                                            }
-                                        };
+                                        let cty = self.parse_type();
                                         if self.current == Token::Eq {
                                             self.advance();
                                         }
@@ -778,52 +1388,14 @@ impl<'a> Parser<'a> {
                                             self.advance();
                                         }
 
-                                        let ty = match &self.current {
-                                            Token::Ident(t) if t == "u8" => {
-                                                self.advance();
-                                                NfdlType::U8
-                                            }
-                                            Token::Ident(t) if t == "u16" => {
-                                                self.advance();
-                                                NfdlType::U16
-                                            }
-                                            Token::Ident(t) if t == "u32" => {
-                                                self.advance();
-                                                NfdlType::U32
-                                            }
-                                            Token::Ident(t) if t == "bytes" => {
-                                                self.advance();
-                                                if self.current == Token::LBracket {
-                                                    self.advance();
-                                                    let len = if let Ok(e) = self.parse_expr() {
-                                                        e
-                                                    } else {
-                                                        Expr::Int(0)
-                                                    };
-                                                    if self.current == Token::RBracket {
-                                                        self.advance();
-                                                    }
-                                                    NfdlType::Bytes { len }
-                                                } else {
-                                                    NfdlType::BytesRest
-                                                }
-                                            }
-                                            Token::Ident(t) => {
-                                                let tname = t.clone();
-                                                self.advance();
-                                                NfdlType::MessageRef(tname)
-                                            }
-                                            _ => {
-                                                self.advance();
-                                                NfdlType::U8
-                                            }
-                                        };
+                                        let ty = self.parse_type();
 
                                         loop_body.push(Field {
                                             name: fname,
                                             ty,
                                             validate: None,
                                             conditional: None,
+                                            order: 0,
                                         });
                                     } else {
                                         self.advance();
@@ -839,12 +1411,14 @@ impl<'a> Parser<'a> {
                                 if self.contains_rem(&condition) {
                                     return Err(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in loop while condition (see spec 05-verification)".into()));
                                 }
+                                let o = body_seq; body_seq += 1;
                                 loops.push(Loop {
                                     name: loop_name,
                                     carries,
                                     condition,
                                     body: loop_body,
                                     nexts,
+                                    order: o,
                                 });
                                 continue;
                             }
@@ -854,50 +1428,7 @@ impl<'a> Parser<'a> {
                                 self.advance();
                             }
 
-                            let ty = match &self.current {
-                                Token::Ident(t) if t == "u8" => {
-                                    self.advance();
-                                    NfdlType::U8
-                                }
-                                Token::Ident(t) if t == "u16" => {
-                                    self.advance();
-                                    NfdlType::U16
-                                }
-                                Token::Ident(t) if t == "u24" => {
-                                    self.advance();
-                                    NfdlType::U24
-                                }
-                                Token::Ident(t) if t == "u32" => {
-                                    self.advance();
-                                    NfdlType::U32
-                                }
-                                Token::Ident(t) if t == "bytes" => {
-                                    self.advance();
-                                    if self.current == Token::LBracket {
-                                        self.advance();
-                                        let len_expr = if let Ok(e) = self.parse_expr() {
-                                            e
-                                        } else {
-                                            Expr::Int(0)
-                                        };
-                                        if self.current == Token::RBracket {
-                                            self.advance();
-                                        }
-                                        NfdlType::Bytes { len: len_expr }
-                                    } else {
-                                        NfdlType::BytesRest
-                                    }
-                                }
-                                Token::Ident(t) => {
-                                    let tname = t.clone();
-                                    self.advance();
-                                    NfdlType::MessageRef(tname)
-                                }
-                                _ => {
-                                    self.advance();
-                                    NfdlType::U8
-                                }
-                            };
+                            let ty = self.parse_type();
 
                             let mut validate = None;
                             if let Token::Ident(v) = &self.current {
@@ -908,9 +1439,25 @@ impl<'a> Parser<'a> {
                                     } else {
                                         Expr::Int(1)
                                     };
+                                    // Per-field `validate expr -> "msg"` (C5): capture
+                                    // the user message instead of dropping it.
+                                    let message = if self.current == Token::Arrow {
+                                        self.advance();
+                                        if let Token::String(s) = &self.current {
+                                            let m = s.clone();
+                                            self.advance();
+                                            m
+                                        } else {
+                                            "constraint".into()
+                                        }
+                                    } else {
+                                        "constraint".into()
+                                    };
+                                    let o = body_seq; body_seq += 1;
                                     validate = Some(Validate {
                                         expr: vexpr,
-                                        message: "constraint".into(),
+                                        message,
+                                        order: o,
                                     });
                                     while self.current != Token::Semicolon
                                         && self.current != Token::RBrace
@@ -940,11 +1487,13 @@ impl<'a> Parser<'a> {
                                 }
                             }
 
+                            let o = body_seq; body_seq += 1;
                             fields.push(Field {
                                 name: kw,
                                 ty,
                                 validate,
                                 conditional,
+                                order: o,
                             });
                         } else {
                             self.advance();
@@ -962,6 +1511,61 @@ impl<'a> Parser<'a> {
                         fields,
                         lets,
                         loops,
+                        validates,
+                        matches,
+                    });
+                }
+                // `bind <layer> <field> to <source> when <cond>;` — layered dispatch (C7)
+                Token::Bind => {
+                    self.advance(); // past `bind`
+                    let layer = if let Token::Ident(n) = &self.current {
+                        let n = n.clone();
+                        self.advance();
+                        n
+                    } else {
+                        String::new()
+                    };
+                    let field = if let Token::Ident(n) = &self.current {
+                        let n = n.clone();
+                        self.advance();
+                        n
+                    } else {
+                        String::new()
+                    };
+                    // optional `to <source>`
+                    let source = if let Token::To = &self.current {
+                        self.advance();
+                        if let Token::Ident(n) = &self.current {
+                            let n = n.clone();
+                            self.advance();
+                            n
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+                    // optional `when <cond>`
+                    let when = if let Token::When = &self.current {
+                        self.advance();
+                        self.parse_expr().unwrap_or(Expr::Int(1))
+                    } else {
+                        Expr::Int(1)
+                    };
+                    while self.current != Token::Semicolon
+                        && self.current != Token::RBrace
+                        && self.current != Token::Eof
+                    {
+                        self.advance();
+                    }
+                    if self.current == Token::Semicolon {
+                        self.advance();
+                    }
+                    proto.binds.push(Bind {
+                        layer,
+                        source,
+                        field,
+                        when,
                     });
                 }
                 Token::Ident(s) if s == "state_machine" => {

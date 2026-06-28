@@ -1,0 +1,19 @@
+// Rule 7 — admin up + oper down -> physical link absent.
+// Note: `present(oper) and oper.state == "DOWN"` short-circuits — oper.state is
+// only accessed when present(oper) is True (03-semantics §3.7 Kleene + short-circuit).
+ruleset "airpulse.port_diagnostics" {
+    version = "1.0"
+    requires = ["topology"]
+
+    evidence link_absent {
+        scope: Port
+        anchor admin: event(port.admin_state) { admin.state == "UP" }
+        correlate oper: event(port.oper_state) {
+            topo: same_port(admin.target, oper.target)
+            time: oper.time in [admin.time - 2s, admin.time + 2s]
+        }
+        if present(oper) and oper.state == "DOWN" {
+            infer Cause(PhysicalLinkAbsent) { target: admin.target, weight: +100, evidence: [admin, oper] }
+        }
+    }
+}

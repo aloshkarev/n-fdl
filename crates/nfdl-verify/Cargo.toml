@@ -5,3 +5,5 @@ edition = "2024"
 rust-version = "1.85"
 
 [dependencies]
+nfdl-syntax = { path = "../nfdl-syntax" }
+nfdl-diag = { path = "../nfdl-diag" }

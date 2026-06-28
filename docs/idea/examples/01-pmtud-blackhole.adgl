@@ -1,0 +1,31 @@
+// Rule 3 — PMTUD blackhole (canonical: anchor + correlate + if/else).
+// Resolves Missing Data Paradox via watermark deferred eval (08-stream-watermarking §5).
+ruleset "airpulse.tcp_diagnostics" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    mutually_exclusive(PmtudBlackhole, Congestion, TransientL2Disruption)
+
+    evidence pmtud_hypothesis {
+        scope: Session
+        anchor rtx: event(tcp.retransmission_burst) {
+            rtx.segment_size > 1400
+        }
+        correlate ptb: event(icmp.ptb) {
+            topo: same_session(rtx.target, ptb.target)
+            time: ptb.time in [rtx.time - 500ms, rtx.time + 1s]
+        }
+        if present(ptb) {
+            infer Cause(PmtudBlackhole) { target: rtx.target, weight: +85, evidence: [rtx, ptb] }
+        } else {
+            infer Cause(PmtudBlackhole) { target: rtx.target, weight: +35, evidence: [rtx] }
+            action request_observation(icmp.visibility) { target: rtx.path }
+        }
+    }
+
+    decision pmtud_verdict {
+        scope: Session
+        anchor c: Cause(PmtudBlackhole) { c.confidence >= 80 }
+        emit Problem(XlIcmpTcpMss) { severity: High, evidence: [c], sarif_id: "l3_pmtud_blackhole" }
+    }
+}

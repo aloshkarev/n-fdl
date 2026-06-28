@@ -57,6 +57,10 @@ impl IntervalAnalyzer {
         // Very crude parser for expressions like "length - 8", "hw_len"
         // Support % modulo axiom per spec 05-verification: e % X => [0, X-1]
         let expr = expr.trim();
+        // A standalone integer literal is a degenerate interval [c, c].
+        if let Ok(c) = expr.parse::<i64>() {
+            return Interval::new(c, c);
+        }
         if let Some(pos) = expr.find('%') {
             let right = expr[pos + 1..].trim();
             if let Ok(x) = right.parse::<i64>() {
@@ -130,7 +134,7 @@ mod tests {
         assert_eq!(pad.lo, 0);
         assert_eq!(pad.hi, 3);
         // full expression approx
-        let full = analyzer.analyze_expr("(4 - (length % 4)) % 4");
+        let _full = analyzer.analyze_expr("(4 - (length % 4)) % 4");
         // crude but should be bounded small
         // crude analyzer gives wide for complex; pad alone proves [0,3]
         // full expr falls back to wide (crude analyzer); % axiom alone is sufficient for padding proof

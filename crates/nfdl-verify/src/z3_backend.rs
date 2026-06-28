@@ -3,7 +3,7 @@
 // In real implementation: use z3 crate
 // For now: stub that always returns "could not prove"
 
-pub fn prove_bounds(expr: &str, facts: &[String]) -> Option<bool> {
+pub fn prove_bounds(_expr: &str, _facts: &[String]) -> Option<bool> {
     // Placeholder: in real impl call Z3 SMT solver
     // For now always return None (could not prove statically)
     // Real implementation would return Some(true/false)

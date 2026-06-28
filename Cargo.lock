@@ -108,6 +108,7 @@ version = "0.1.0"
 dependencies = [
  "nfdl-runtime",
  "nfdl-syntax",
+ "nfdl-verify",
 ]
 
 [[package]]
@@ -146,6 +147,10 @@ version = "0.1.0"
 [[package]]
 name = "nfdl-verify"
 version = "0.1.0"
+dependencies = [
+ "nfdl-diag",
+ "nfdl-syntax",
+]
 
 [[package]]
 name = "nfdl-vm"

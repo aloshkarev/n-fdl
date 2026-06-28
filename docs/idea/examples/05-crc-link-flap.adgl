@@ -1,0 +1,19 @@
+// Rule 6 — port CRC errors + link flaps -> suspected cable damage.
+ruleset "airpulse.port_diagnostics" {
+    version = "1.0"
+    requires = ["topology"]
+
+    mutually_exclusive(PhysicalCableDamage, PhysicalLinkAbsent)
+
+    evidence crc_link_flap {
+        scope: Port
+        anchor crc: event(port.crc_errors)
+        correlate flap: event(port.link_flap) {
+            topo: same_port(crc.target, flap.target)
+            time: flap.time in [crc.time - 5s, crc.time + 5s]
+        }
+        if present(flap) {
+            infer Cause(PhysicalCableDamage) { target: crc.target, weight: +90, evidence: [crc, flap] }
+        }
+    }
+}

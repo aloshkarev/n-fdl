@@ -1,0 +1,22 @@
+// Rule 10 — AP deauth storm + missing RF telemetry -> request RF.
+// C10: same_ap Unknown => absent(rf) is Unknown (not false) => then-branch
+// skipped (no else here), engine auto-emits request_topology. With topology
+// known, absent(rf) after the 5s forward window triggers RfInterference +
+// request_observation.
+ruleset "airpulse.wifi_diagnostics" {
+    version = "1.0"
+    requires = ["wifi-ota", "topology"]
+
+    evidence ap_deauth_missing_rf {
+        scope: AccessPoint
+        anchor storm: event(wifi.deauth_burst)
+        correlate rf: event(wifi.rf_telemetry) {
+            topo: same_ap(storm.target, rf.target)
+            time: rf.time in [storm.time - 5s, storm.time + 5s]
+        }
+        if absent(rf) {
+            infer Cause(RfInterference) { target: storm.target, weight: +40, evidence: [storm] }
+            action request_observation(wifi.rf_metrics) { target: storm.target }
+        }
+    }
+}

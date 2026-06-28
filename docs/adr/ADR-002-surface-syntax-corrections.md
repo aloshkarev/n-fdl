@@ -3,7 +3,7 @@
 - **Status:** Accepted (baseline for v1)
 - **Date:** 2026-06-25
 - **Supersedes:** original syntax sketch in project brief §4 / §6
-- **Related:** ADR-006 (match typing), ADR-008 (session keys), ADR-009 (EOF split)
+- **Related:** ADR-006 (match typing, C6), ADR-008 (session keys, C4/C10); C1 (`bytes[EOF]` split) и C2 (`carry`/`next`) покрыты ниже в этом документе
 
 ## Контекст
 

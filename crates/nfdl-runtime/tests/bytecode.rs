@@ -4,9 +4,12 @@ use nfdl_runtime::{BytecodeProgram, BytecodeVm, Instruction};
 fn simple_arp_bytecode() {
     let program = BytecodeProgram {
         instructions: vec![
-            Instruction::ReadU16 { slot: 0 },
-            Instruction::ReadU16 { slot: 1 },
-            Instruction::Validate { pred_slot: 0 },
+            Instruction::ReadU16 { slot: 0, le: false },
+            Instruction::ReadU16 { slot: 1, le: false },
+            Instruction::Validate {
+                pred_slot: 0,
+                message: "hw_type must be 1".to_string(),
+            },
             Instruction::Return,
         ],
         slot_count: 4,

@@ -12,11 +12,17 @@ pub fn fuzz_bytecode_vm(data: &[u8]) {
             let slot = u16::from_le_bytes([chunk[1], chunk[2]]);
             
             let instr = match opcode % 6 {
-                0 => Instruction::ReadU16 { slot },
+                0 => Instruction::ReadU16 { slot, le: (slot % 2 == 0) },
                 1 => Instruction::ReadU8 { slot },
                 2 => Instruction::ReadSlice { len_slot: slot, dst_slot: slot + 1 },
-                3 => Instruction::Validate { pred_slot: slot },
-                4 => Instruction::EmitField { name: slot, slot: slot + 1 },
+                3 => Instruction::Validate {
+                    pred_slot: slot,
+                    message: "fuzz".to_string(),
+                },
+                4 => Instruction::EmitField {
+                    name: format!("f{}", slot),
+                    slot: slot + 1,
+                },
                 _ => Instruction::Return,
             };
             instructions.push(instr);

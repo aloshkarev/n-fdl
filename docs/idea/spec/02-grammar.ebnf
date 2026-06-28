@@ -1,0 +1,137 @@
+(* ========================================================================= *)
+(* ADGL Grammar v1 — ISO/IEC 14977-ish EBNF                                    *)
+(* Зеркалирует нотацию N-FDL ../../spec/02-grammar.ebnf                        *)
+(*                                                                           *)
+(* Legend:                                                                    *)
+(*   A B        concat       [A]   optional      {A}   repeat (0+)            *)
+(*   A | B      alternation  (A)   grouping      "lit" terminal               *)
+(*   UPPER      lexical tokens из 01-lexical.md                                *)
+(*   PascalCase nonterminals                                                   *)
+(*                                                                           *)
+(* Correction IDs C1..C12 сквозные в ADR-list:                                 *)
+(*   C1  execution model      C2  confidence scale    C3  scope vs target      *)
+(*   C4  watermark            C5  ambiguity/exclusivity C6 bipartite           *)
+(*   C7  contradicts          C8  sarif mapping       C9  privacy              *)
+(*   C10 topology unknown     C11 dos limits         C12 determinism           *)
+(* ========================================================================= *)
+
+(* ----- 1. Top level ----------------------------------------------------- *)
+
+Ruleset       ::= "ruleset" StringLit "{" RulesetHeader { Rule } "}" ;
+
+RulesetHeader ::= Version { Decl } ;                                           (* version, then 0+ requires/mutually_exclusive in any order *)
+Version       ::= "version" "=" StringLit ;                                    (* C1, semver; no trailing ";" — delimited by next keyword (requires/mutually_exclusive/evidence/decision/}) *)
+Decl          ::= "requires" "=" "[" StringLit { "," StringLit } "]"           (* capability IDs, C11 *)
+               | "mutually_exclusive" "(" IdentList ")" ;                      (* C5 *)
+
+IdentList     ::= Ident { "," Ident } ;
+Rule          ::= EvidenceRule | DecisionRule ;                                (* C6 bipartite *)
+
+(* ----- 2. Evidence rules (Event -> Cause) ------------------------------- *)
+
+EvidenceRule  ::= "evidence" Ident "{" "scope" ":" ScopeType
+                    AnchorBlock
+                    { CorrelateBlock }
+                    [ IfElseBlock ]
+                    { InferStmt | ActionStmt }
+                  "}" ;                                                        (* C6: evidence -> Cause + Action *)
+
+(* ----- 3. Decision rules (Cause|Problem -> Problem + Action) ------------ *)
+
+DecisionRule  ::= "decision" Ident "{" "scope" ":" ScopeType
+                    DecisionAnchor
+                    { CorrelateBlock }
+                    [ IfElseBlock ]
+                    { EmitStmt | ActionStmt }
+                  "}" ;                                                        (* C6: decision -> Problem + Action *)
+
+DecisionAnchor::= "anchor" Ident ":" ( CauseAnchor | ProblemAnchor ) ;     (* C6: anchor ∈ {Cause, Problem}; CauseAnchor ends with "}", ProblemAnchor delimited by following keyword (no trailing ";", mirrors AnchorBlock) *)
+
+CauseAnchor   ::= "Cause" "(" Ident ")" "{" Predicate "}" ;                    (* c.confidence >= 80 *)
+ProblemAnchor ::= "Problem" "(" Ident ")" [ "{" Predicate "}" ] ;              (* downstream: Problem(DeviceUnreachable) *)
+
+(* ----- 4. Anchor / Correlate ------------------------------------------- *)
+
+AnchorBlock   ::= "anchor" Ident ":" "event" "(" EventType ")" [ "{" [ Predicate ] "}" ] ;   (* predicate block optional: anchors without filter, e.g. Rule 1/6/10 *)
+
+CorrelateBlock::= "correlate" Ident ":" CorrelateSource
+                    "{" "topo" ":" TopoPredicate
+                         "time" ":" TimeWindow
+                    "}" ;                                                      (* deferred eval, C4 *)
+                                                                              (* source: event in evidence rules; Problem/Cause in decision rules, Example 8 *)
+
+CorrelateSource::= "event" "(" EventType ")" | "Problem" "(" Ident ")" | "Cause" "(" Ident ")" ;
+
+TopoPredicate ::= Ident "(" ExprList ")" ;                                     (* same_session / same_port / upstream_of / ... *)
+
+TimeWindow    ::= Expr "in" "[" Expr "," Expr "]" ;                            (* inclusive both ends, C4/D4 *)
+
+(* ----- 5. Infer / Emit / Action ---------------------------------------- *)
+
+InferStmt     ::= "infer" "Cause" "(" Ident ")" "{" InferField { "," InferField } "}" ;
+InferField    ::= "target" ":" Expr
+                | "weight" ":" ( "+" IntLit | "-" IntLit )                      (* C7: Contradicts via negative *)
+                | "evidence" ":" "[" RefList "]" ;
+
+EmitStmt      ::= "emit" "Problem" "(" Ident ")" "{" EmitField { "," EmitField } "}" ;
+EmitField     ::= "target" ":" Expr
+                | "severity" ":" Severity
+                | "evidence" ":" "[" RefList "]"
+                | "sarif_id" ":" StringLit ;                                   (* C8: stable ruleId override *)
+
+ActionStmt    ::= "action" Ident [ "(" KindIdent ")" ] "{" ActionField { "," ActionField } "}" ;   (* kind = single Ident (request_observation); arg = dotted KindIdent (icmp.visibility) or binding (downstream) *)
+ActionField   ::= "target" ":" Expr
+                | "reason" ":" StringLit
+                | "evidence" ":" "[" RefList "]" ;
+
+Severity      ::= "Critical" | "High" | "Medium" | "Low" | "Recommended" | "Optional" ;
+RefList       ::= Ref { "," Ref } ;
+Ref           ::= Ident ;                                                       (* anchor/correlate binding name *)
+
+(* ----- 6. Control flow -------------------------------------------------- *)
+
+IfElseBlock   ::= "if" Expr "{" { InferStmt | EmitStmt | ActionStmt } "}"
+                  [ "else" "{" { InferStmt | EmitStmt | ActionStmt } "}" ] ;   (* cond — T3-valued Expr: present/absent primaries + metric predicates, Kleene + short-circuit, 03 §3.7, C10 *)
+
+(* ----- 7. Scope types --------------------------------------------------- *)
+
+ScopeType     ::= "Session" | "Port" | "ClientMac" | "Vlan"
+                | "AccessPoint" | "Global" ;                                   (* C3; Global = singleton partition *)
+
+(* ----- 8. Expressions (precedence по 01 §6.1) -------------------------- *)
+
+Expr          ::= LogicOr ;
+LogicOr       ::= LogicAnd { ( "||" | "or" ) LogicAnd } ;
+LogicAnd      ::= Equality { ( "&&" | "and" ) Equality } ;
+Equality      ::= Additive { ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" ) Additive } ;
+Additive      ::= Multiplicative { ( "+" | "-" ) Multiplicative } ;
+Multiplicative::= Unary { ( "*" | "/" | "%" ) Unary } ;
+Unary         ::= ( "!" | "not" ) Unary | Postfix ;
+Postfix       ::= Primary { "." Ident | "(" ExprList ")" | "[" Expr "]" } ;
+Primary       ::= IntLit | DurationLit | StringLit
+                | Ident                                  (* binding / metric root *)
+                | "true" | "false"
+                | "present" "(" Ident ")"                (* correlate binding — T3-valued (present|absent|Unknown), C10 *)
+                | "absent"  "(" Ident ")"
+                | "(" Expr ")" ;
+
+ExprList      ::= [ Expr { "," Expr } ] ;
+
+Predicate     ::= Expr ;                                (* Bool/T3-valued Expr: anchor/correlate filters, decision-anchor predicates (c.confidence >= 80) *)
+
+(* ----- 9. Catalog references ------------------------------------------- *)
+
+KindIdent      ::= Ident { "." Ident } ;                                (* dotted catalog id: event types (tcp.retransmission_burst), observation/check kinds (icmp.visibility) *)
+EventType      ::= KindIdent ;                                          (* catalog event id *)
+(* Cause/Problem Ident — single Ident (PmtudBlackhole, XlIcmpTcpMss), no dots *)
+(* metric paths ::= rtx.segment_size, rtx.target, rtx.time, rtx.vlan, ...      *)
+(*   верификатор (05 §1) проверяет существование каждого path в каталоге.       *)
+
+(* ----- 10. Что НЕ входит в v1 ------------------------------------------ *)
+(* - user-defined functions / plugins (catalog-only topology + actions, 10)   *)
+(* - loops / recursion (DAG ацикличен, 05 §2)                                  *)
+(* - float literals (confidence 0..100 u8, ADR-002)                            *)
+(* - range operator ".." (окна = [a,b], 01 §7)                                 *)
+(* - nested rulesets / imports (один ruleset на файл в v1)                     *)
+(* - stateful action bodies (action = declarative intent, 03 §3)               *)
+(* ========================================================================= *)

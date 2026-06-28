@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 nfdl-syntax = { path = "../nfdl-syntax" }
 nfdl-runtime = { path = "../nfdl-runtime" }
+nfdl-verify = { path = "../nfdl-verify" }

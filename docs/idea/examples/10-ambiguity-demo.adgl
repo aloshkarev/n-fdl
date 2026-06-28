@@ -1,0 +1,30 @@
+// Demo — AmbiguityNode autonomous synthesis (C5, ADR-005).
+//
+// Two mutually exclusive causes are seeded from one event type. When both reach
+// Probable (40-79) with Δconfidence < 15, the engine synthesizes an
+// AmbiguityNode and emits the mark_ambiguous action, which surfaces as
+// Problem(AmbiguousDiagnosis) in SARIF with partialFingerprints
+// {scope, target_hash, causes} (ADR-008). No explicit decision rule is needed —
+// synthesis is engine-driven (03-semantics §4).
+//
+// Trace: one tcp.retransmission_burst with segment_size > 1400 fires both
+// evidence rules => Congestion=45 and PmtudBlackhole=45 (both Probable, Δ=0<15)
+// => AmbiguityNode(Congestion, PmtudBlackhole) + mark_ambiguous.
+ruleset "airpulse.ambiguity_demo" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    mutually_exclusive(Congestion, PmtudBlackhole)
+
+    evidence seed_congestion {
+        scope: Session
+        anchor rtx: event(tcp.retransmission_burst)
+        infer Cause(Congestion) { target: rtx.target, weight: +45, evidence: [rtx] }
+    }
+
+    evidence seed_pmtud {
+        scope: Session
+        anchor rtx: event(tcp.retransmission_burst) { rtx.segment_size > 1400 }
+        infer Cause(PmtudBlackhole) { target: rtx.target, weight: +45, evidence: [rtx] }
+    }
+}

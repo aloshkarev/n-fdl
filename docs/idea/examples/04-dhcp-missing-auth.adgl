@@ -1,0 +1,29 @@
+// Rule 5 — DHCP timeout + missing EAPOL/RADIUS -> request AAA evidence.
+// Correction C3/B2: scope is ClientMac, but target is dhcp.vlan (Vlan is an
+// ancestor of ClientMac in the scope hierarchy, 04 §5). inferring
+// Cause(AuthServerOutage) with target: dhcp.vlan triggers cross-scope roll-up
+// into the Vlan partition (09 §3), where the 03-auth-outage-impact decision fires.
+// C10: if same_client returns Unknown, absent(eapol)/absent(rad) become Unknown
+// (Kleene), the then-branch is skipped (no else here), and the engine auto-emits
+// request_topology.
+ruleset "airpulse.aaa_diagnostics" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    evidence dhcp_timeout_missing_auth {
+        scope: ClientMac
+        anchor dhcp: event(dhcp.timeout)
+        correlate eapol: event(dot1x.eapol_start) {
+            topo: same_client(dhcp.target, eapol.target)
+            time: eapol.time in [dhcp.time - 10s, dhcp.time]
+        }
+        correlate rad: event(radius.access_request) {
+            topo: same_client(dhcp.target, rad.target)
+            time: rad.time in [dhcp.time - 10s, dhcp.time]
+        }
+        if absent(eapol) and absent(rad) {
+            infer Cause(AuthServerOutage) { target: dhcp.vlan, weight: +50, evidence: [dhcp] }
+            action request_observation(aaa.telemetry) { target: dhcp.vlan }
+        }
+    }
+}

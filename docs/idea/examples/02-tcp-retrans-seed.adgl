@@ -1,0 +1,17 @@
+// Rule 1 — one event seeds multiple competing causes.
+// Correction C5: mutually_exclusive declared so AmbiguityNode can synthesize
+// when two causes reach Probable (40-79) with Δconfidence < 15 (03-semantics §4).
+ruleset "airpulse.tcp_seed" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    mutually_exclusive(Congestion, PmtudBlackhole, TransientL2Disruption)
+
+    evidence tcp_retrans_seed {
+        scope: Session
+        anchor rtx: event(tcp.retransmission_burst)
+        infer Cause(Congestion)            { target: rtx.target, weight: +35, evidence: [rtx] }
+        infer Cause(PmtudBlackhole)        { target: rtx.target, weight: +35, evidence: [rtx] }
+        infer Cause(TransientL2Disruption) { target: rtx.target, weight: +20, evidence: [rtx] }
+    }
+}

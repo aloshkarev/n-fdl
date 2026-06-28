@@ -1,0 +1,9 @@
+# CodeCortex indexing ignores (git may still track these paths)
+target/
+node_modules/
+.git/
+dist/
+build/
+__pycache__/
+*.pyc
+.DS_Store

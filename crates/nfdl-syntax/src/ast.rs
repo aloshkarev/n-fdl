@@ -42,6 +42,8 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    Tuple(Vec<Expr>),
+    Field(Box<Expr>, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +83,8 @@ pub enum UnaryOp {
 pub struct Validate {
     pub expr: Expr,
     pub message: String,
+    /// Source order within the enclosing body (for interleaved emission).
+    pub order: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,12 +93,16 @@ pub struct Field {
     pub ty: NfdlType,
     pub validate: Option<Validate>,
     pub conditional: Option<Expr>, // if cond
+    /// Source order within the enclosing body (for interleaved emission).
+    pub order: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Let {
     pub name: String,
     pub value: Expr,
+    /// Source order within the enclosing body (for interleaved emission).
+    pub order: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +125,8 @@ pub struct Loop {
     pub condition: Expr,
     pub body: Vec<Field>,
     pub nexts: Vec<NextStmt>, // next statements collected from body
+    /// Source order within the enclosing body (for interleaved emission).
+    pub order: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,13 +135,37 @@ pub struct Message {
     pub fields: Vec<Field>,
     pub lets: Vec<Let>,
     pub loops: Vec<Loop>,
+    pub validates: Vec<Validate>,
+    pub matches: Vec<Match>,
+}
+
+/// A `match <tag> { case N => { ... } default => { ... } }` tagged union.
+/// Each arm carries a mini message-body (fields/lets/loops/validates). The
+/// `case` value is `None` for the `default` arm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Match {
+    pub tag: Expr,
+    pub arms: Vec<MatchArm>,
+    /// Source order within the enclosing body (for interleaved emission).
+    pub order: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub case: Option<i64>,
+    pub fields: Vec<Field>,
+    pub lets: Vec<Let>,
+    pub loops: Vec<Loop>,
+    pub validates: Vec<Validate>,
+    pub matches: Vec<Match>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bind {
-    pub outer: String,
-    pub inner: String,
-    pub when: Expr,
+    pub layer: String,  // target message to parse from the payload bytes (e.g. "IPv4")
+    pub source: String, // source message that owns the payload field (e.g. "TunnelMessage")
+    pub field: String,  // payload field name in the source (e.g. "payload")
+    pub when: Expr,     // dispatch condition evaluated against source fields
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -168,6 +202,7 @@ pub struct Protocol {
     pub name: String,
     pub endian: String, // "big" | "little"
     pub mode: String,   // "datagram" | "stream"
+    pub eof: String,    // EOF source for bytes[EOF]: "" | "on_fin" | "on_close" | "by_plugin(...)"
     pub messages: Vec<Message>,
     pub binds: Vec<Bind>,
     pub state_machines: Vec<StateMachine>,
@@ -179,6 +214,7 @@ impl Default for Protocol {
             name: String::new(),
             endian: "big".to_string(),
             mode: "datagram".to_string(),
+            eof: String::new(),
             messages: vec![],
             binds: vec![],
             state_machines: vec![],

@@ -2,8 +2,18 @@
 
 use crate::event_bus::Event;
 use crate::session::{FlowKey, SessionDb};
-use nfdl_syntax::ast::{Action, BinOp, Expr, StateMachine as AstSm, Transition as AstTrans};
+use nfdl_syntax::ast::{Action, Expr, StateMachine as AstSm, Transition as AstTrans};
 use std::collections::HashMap;
+
+/// Map a state name to a numeric id for `FsmTransition`/`SessionDb`.
+fn state_numeric(s: &str) -> u32 {
+    match s {
+        "IDLE" | "CLOSED" => 0,
+        "PENDING" | "SYN_SENT" | "ESTABLISHED" => 1,
+        "FIN_WAIT" => 2,
+        _ => 0,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FsmEngine {
@@ -12,6 +22,8 @@ pub struct FsmEngine {
     machines: HashMap<String, HashMap<String, Vec<AstTrans>>>,
     // machine name -> key expr (for computing FlowKey)
     keys: HashMap<String, Option<Expr>>,
+    // machine name -> initial state name (a fresh flow starts here, not "IDLE")
+    initials: HashMap<String, String>,
     current_states: HashMap<FlowKey, String>, // per-flow current state name
     variables: HashMap<FlowKey, HashMap<String, u64>>, // per-flow variables from set
 }
@@ -22,6 +34,7 @@ impl FsmEngine {
             db: SessionDb::new(max_sessions),
             machines: HashMap::new(),
             keys: HashMap::new(),
+            initials: HashMap::new(),
             current_states: HashMap::new(),
             variables: HashMap::new(),
         }
@@ -30,6 +43,7 @@ impl FsmEngine {
     pub fn load_from_ast(&mut self, sms: &[AstSm]) {
         self.machines.clear();
         self.keys.clear();
+        self.initials.clear();
         for sm in sms {
             let mut state_map: HashMap<String, Vec<AstTrans>> = HashMap::new();
             for st in &sm.states {
@@ -37,6 +51,7 @@ impl FsmEngine {
             }
             self.machines.insert(sm.name.clone(), state_map);
             self.keys.insert(sm.name.clone(), sm.key.clone());
+            self.initials.insert(sm.name.clone(), sm.initial.clone());
         }
     }
 
@@ -52,72 +67,15 @@ impl FsmEngine {
     }
 
     fn eval_expr(&self, e: &Expr, ctx: &HashMap<String, u64>, key: &FlowKey) -> u64 {
-        match e {
-            Expr::Int(v) => *v as u64,
-            Expr::Ident(name) => {
-                if let Some(vars) = self.variables.get(key) {
-                    if let Some(v) = vars.get(name) {
-                        return *v;
-                    }
-                }
-                *ctx.get(name).unwrap_or(&0)
+        // Per-flow variables (from `set` actions) take priority over parsed-field context.
+        let mut vars = ctx.clone();
+        if let Some(flow_vars) = self.variables.get(key) {
+            for (k, v) in flow_vars {
+                vars.insert(k.clone(), *v);
             }
-            Expr::Binary { op, left, right } => {
-                let l = self.eval_expr(left, ctx, key);
-                let r = self.eval_expr(right, ctx, key);
-                match op {
-                    BinOp::Eq => {
-                        if l == r {
-                            1
-                        } else {
-                            0
-                        }
-                    }
-                    BinOp::And => {
-                        if l != 0 && r != 0 {
-                            1
-                        } else {
-                            0
-                        }
-                    }
-                    BinOp::Or => {
-                        if l != 0 || r != 0 {
-                            1
-                        } else {
-                            0
-                        }
-                    }
-                    BinOp::Gt => {
-                        if l > r {
-                            1
-                        } else {
-                            0
-                        }
-                    }
-                    BinOp::Lt => {
-                        if l < r {
-                            1
-                        } else {
-                            0
-                        }
-                    }
-                    BinOp::Sub => l.wrapping_sub(r),
-                    BinOp::Add => l.wrapping_add(r),
-                    _ => 0,
-                }
-            }
-            Expr::Unary { op: _, expr: _ } => 0, // TODO full support
-            Expr::Ternary {
-                cond: _,
-                then_branch: _,
-                else_branch: _,
-            } => 0,
-            Expr::Coalesce {
-                value: _,
-                default: _,
-            } => 0,
-            Expr::Call { .. } => 0, // handled at key computation level
         }
+        // Delegate to the full operator evaluator (covers all BinOp/Unary/Ternary/Coalesce).
+        crate::integration::eval_expr(e, &vars)
     }
 
     fn eval_guard(&self, guard: &Option<Expr>, ctx: &HashMap<String, u64>, key: &FlowKey) -> bool {
@@ -135,12 +93,21 @@ impl FsmEngine {
         msg_type: &str,
         ctx: &HashMap<String, u64>,
     ) -> (String, Vec<Event>) {
-        let current = self.get_current_state(&key);
+        // A fresh flow has no recorded current state. Per machine, the initial
+        // state (e.g. TCP `CLOSED`, not the generic `IDLE`) is where transitions
+        // are declared, so seed from the machine's `initial` before lookup.
+        let mut current = self.get_current_state(&key);
         let mut events = vec![];
         let mut new_state = current.clone();
 
         // Look in all machines
         for (machine_name, states) in &self.machines {
+            if current == "IDLE" {
+                if let Some(init) = self.initials.get(machine_name) {
+                    current = init.clone();
+                    new_state = current.clone();
+                }
+            }
             if let Some(transitions) = states.get(&current) {
                 for tr in transitions {
                     if tr.msg_type == msg_type && self.eval_guard(&tr.guard, ctx, &key) {
@@ -166,8 +133,8 @@ impl FsmEngine {
                         }
 
                         events.push(Event::FsmTransition {
-                            from: 0,
-                            to: 1,
+                            from: state_numeric(&current),
+                            to: state_numeric(&tr.to_state),
                             machine: machine_name.clone(),
                         });
 
@@ -178,12 +145,7 @@ impl FsmEngine {
         }
 
         self.set_current_state(&key, new_state.clone());
-        let numeric = match new_state.as_str() {
-            "IDLE" | "CLOSED" => 0,
-            "PENDING" | "SYN_SENT" | "ESTABLISHED" => 1,
-            "FIN_WAIT" => 2,
-            _ => 0,
-        };
+        let numeric = state_numeric(&new_state);
         self.db.transition(&key, numeric, None);
 
         (new_state, events)

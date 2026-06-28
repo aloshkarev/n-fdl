@@ -21,6 +21,9 @@ pub use integration::{
     protocol_to_bytecode_with_map,
 };
 pub use reassembly::Reassembler;
-pub use runner::{parse_and_run, parse_and_run_with_data};
+pub use runner::{
+    parse_and_run, parse_and_run_stream, parse_and_run_with_data,
+    parse_and_run_with_data_and_limits,
+};
 pub use session::{FlowKey, SessionContext, SessionDb};
 pub use vm::VmState;

@@ -1,0 +1,31 @@
+// Rule 8 — upstream router down suppresses downstream unreachable.
+// Corrections:
+//   C3/B3 — scope: Global (singleton partition, 09-scopes-sessions §6).
+//   C6    — decision-anchor on Problem (allowed, ADR-006; reacts to ProblemEmission).
+//   C10/C11 — upstream_of is cycle-bound (max_topology_hops); a topology cycle
+//             resolves to False + ADGL3006, never panics (07-runtime §6).
+//   C7    — suppress_symptom marks the downstream Problem superseded (append-only,
+//           no deletion, ADR-007).
+// Note: Problem(DeviceUnreachable) is emitted by a separate verdict rule (not
+//       shown here); this suppression decision reacts to that ProblemEmission
+//       (03 §3.5). In v1 the emitter must live in the same ruleset (single
+//       ProgramImage per file, 02 §10); cross-ruleset linking — v1.5+.
+ruleset "airpulse.topo_suppression" {
+    version = "1.0"
+    requires = ["topology"]
+
+    decision suppress_downstream {
+        scope: Global
+        anchor downstream: Problem(DeviceUnreachable)
+        correlate upstream: Problem(DeviceUnreachable) {
+            topo: upstream_of(upstream.target, downstream.target)
+            time: upstream.time in [downstream.time - 30s, downstream.time + 5s]
+        }
+        if present(upstream) {
+            action suppress_symptom(downstream) {
+                reason: "Masked by upstream topology failure",
+                evidence: [upstream]
+            }
+        }
+    }
+}

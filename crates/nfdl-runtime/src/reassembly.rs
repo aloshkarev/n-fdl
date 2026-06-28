@@ -36,7 +36,7 @@ impl Reassembler {
             return Err(ReassemblyError::LimitExceeded);
         }
 
-        let rel = seq.wrapping_sub(self.base_seq);
+        let _rel = seq.wrapping_sub(self.base_seq);
 
         if seq == self.next_seq {
             // In order

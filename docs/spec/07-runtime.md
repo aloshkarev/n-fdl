@@ -31,6 +31,16 @@ vm → runtime → {stream, fsm}`. `plugin`, `diag` — листовые (зав
 
 Все crate: `#![forbid(unsafe_code)]`, кроме `nfdl-plugin` (см. §7).
 
+> **Implementation status (M0, 2026-06).** Схема выше — целевая архитектура v1.
+> Текущая реализация: бо́льшая часть логики (bytecode-компилятор, VM, EFSM,
+> sessions, reassembly, runner) живёт в **`nfdl-runtime`**; парсер/AST — в
+> **`nfdl-syntax`**; `nfdl-verify` существует обособленно (interval-анализ + Z3
+> stub) и **не подключён** к пайплайну. Крейты `nfdl-types`, `nfdl-ir`,
+> `nfdl-bytecode`, `nfdl-vm`, `nfdl-diag` — пустые placeholder’ы (`M0
+> placeholder`). `nfdl-stream`/`nfdl-fsm`/`nfdl-plugin` как отдельные крейты ещё
+> не выделены. Расщепление монолита по целевой схеме — работа milestone’ов
+> M1–M6 (`13-roadmap.md`), не часть M0.
+
 ## 2. Lifetime-модель буферов: два режима
 
 Центральное решение (ADR-004). Zero-copy срез не может пережить буфер. Два

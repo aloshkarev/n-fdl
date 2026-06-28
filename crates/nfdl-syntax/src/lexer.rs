@@ -11,11 +11,8 @@ pub enum Token {
     Datagram,
     Validate,
     Bind,
-    Payload,
     To,
     When,
-    U8,
-    U16,
     Ident(String),
     Int(i64),
     String(String),
@@ -28,6 +25,7 @@ pub enum Token {
     Colon,
     Semicolon,
     Eq,
+    Ne,
     Dot,
     Minus,
     Plus,
@@ -150,28 +148,52 @@ impl<'a> Lexer<'a> {
                     "datagram" => Token::Datagram,
                     "validate" => Token::Validate,
                     "bind" => Token::Bind,
-                    "payload" => Token::Payload,
+                    // `payload` stays an `Ident`: it is a common field name and
+                    // the bind syntax reads it positionally (`bind L payload to M`).
                     "to" => Token::To,
                     "when" => Token::When,
-                    "u8" => Token::U8,
-                    "u16" => Token::U16,
+                    // `u8`/`u16`/`u24`/`u32` stay as `Ident` so the type parser
+                    // matches them uniformly via `Token::Ident(t) if t == "uN"`.
                     _ => Token::Ident(ident),
                 }
             }
             Some(c) if c.is_ascii_digit() => {
                 let mut num = String::new();
                 num.push(c);
-                while let Some(c) = self.peek() {
-                    if c.is_ascii_digit() || c == '_' {
+                let radix = if c == '0' {
+                    match self.peek() {
+                        Some('x') | Some('X') => {
+                            self.bump();
+                            16
+                        }
+                        Some('o') | Some('O') => {
+                            self.bump();
+                            8
+                        }
+                        Some('b') | Some('B') => {
+                            self.bump();
+                            2
+                        }
+                        _ => 10,
+                    }
+                } else {
+                    10
+                };
+                if radix != 10 {
+                    // num currently holds the leading "0" prefix; drop it before digits
+                    num.clear();
+                }
+                while let Some(ch) = self.peek() {
+                    if ch.is_digit(radix) || ch == '_' {
                         num.push(self.bump().unwrap());
                     } else {
                         break;
                     }
                 }
-                if let Ok(v) = num.replace('_', "").parse::<i64>() {
-                    Token::Int(v)
-                } else {
-                    Token::Error("bad int".into())
+                let digits: String = num.chars().filter(|c| *c != '_').collect();
+                match i64::from_str_radix(&digits, radix) {
+                    Ok(v) => Token::Int(v),
+                    Err(_) => Token::Error("bad int".into()),
                 }
             }
             Some('"') => {
@@ -232,7 +254,14 @@ impl<'a> Lexer<'a> {
             }
             Some('^') => Token::BitXor,
             Some('%') => Token::Mod,
-            Some('!') => Token::Bang,
+            Some('!') => {
+                if self.peek() == Some('=') {
+                    self.bump();
+                    Token::Ne
+                } else {
+                    Token::Bang
+                }
+            }
             Some('~') => Token::Tilde,
             Some('*') => Token::Star,
             Some('/') => Token::Slash,

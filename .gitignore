@@ -21,6 +21,8 @@
 # IDEs and editors
 .idea/
 .vscode/
+.cursor/
+.grok/
 *.swp
 *.swo
 *~
@@ -36,4 +38,3 @@ Thumbs.db
 # Project-specific generated / build artifacts (if any)
 # Add more as needed, e.g.:
 # *.nfdl.compiled
-PRODUCTION_CHECKLIST.md

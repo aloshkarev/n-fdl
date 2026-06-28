@@ -22,22 +22,32 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 
 ---
 
-## ADR-002 — `let` mutation inside loop (C2)
+## ADR-002 — Surface Syntax v1: Corrections (C1–C8)
 
-**Options**
-- Shadowing `let curr_type = ...` внутри итерации
-- Assignment (`curr_type = ...`)
-- Dedicated `carry` / `next` (loop-carried accumulator)
+**Детальный ADR:** [ADR-002-surface-syntax-corrections.md](ADR-002-surface-syntax-corrections.md)
+(Status: Accepted, 2026-06-25; supersedes original syntax sketch in project brief §4/§6).
 
-**Recommendation**: Dedicated `carry` / `next`.
+**Кратко:** консолидированный набор исправлений синтаксиса v1, вытекающих из
+формальной модели (ациклический DAG полей + pure/effect + завершаемость).
+Формальная модель — источник истины, синтаксис подгоняется под неё.
 
-**Trade-offs**
-- Новый синтаксис (нужен в грамматике)
-- Сохраняет DAG-чистоту и завершаемость (внутри итерации иммутабельно)
-- Явно выражает fold-семантику связных списков (GTP-U)
-- Shadowing ломает видимость между итерациями; assignment вводит effect в pure-выражение
+- **C1** — split `bytes[..]` (rest-of-slice) vs `bytes[EOF]` (stream-end; только в
+  `mode=stream`, последнее поле; источник EOF объявляется в `meta eof = ...`).
+- **C2** — loop-carried accumulator `carry` / `next` вместо `let`-мутации внутри
+  цикла (fold/unfold; DAG ацикличен внутри итерации; `C2-progress` — потребление
+  ≥1 байта за итерацию + `max_loop_iterations`).
+- **C3** — layer-path scope (`IPv4.src`) резолвится по `layer_stack` dispatcher’а.
+- **C4** — `bidir` / `bidir_tuple` для канонической направленно-независимой
+  request/response корреляции.
+- **C5** — interval/range analysis + runtime-downgrade; Z3 — опциональный
+  verifier-backend за feature-flag в v1.5.
+- **C6** — `match` → tagged union в Typed AST.
+- **C7** — рекурсивная инкапсуляция: циклы в bind-графе разрешены, runtime
+  ограничено `max_layer_depth` + payload-shrink invariant.
+- **C8** — `__current_offset` (локальное) vs `__root_offset` (абсолютное).
 
-Принято в ADR-002.
+> Решение по `let`-мутации/`carry` (C2) ранее занимало этот слот как
+> самостоятельная запись списка; теперь оно — секция C2 детального ADR-002.
 
 ---
 
@@ -141,20 +151,20 @@ endpoint keys + опциональная directionality.
 
 ---
 
-## ADR-009 — `bytes[EOF]` semantics split (C1)
+## ADR-009 — Record Types for Plugin Results (C9)
 
-**Options**
-- Единый `bytes[EOF]` (datagram = rest, stream = end)
-- Split: `bytes[..]` (rest-of-slice) + `bytes[EOF]` (stream-end)
+**Детальный ADR:** [ADR-009-plugin-record-types.md](ADR-009-plugin-record-types.md)
+(Status: Accepted, 2026-06-25; related: ADR-002 C8 offset model, `04-type-system.md`, `udp_dns.nfdl`).
 
-**Recommendation**: Split + `meta eof = on_fin | on_close | by_plugin(...)`.
+**Кратко:** `invoke` может возвращать `record{...}` (плоский, именованные поля,
+иммутабельный, по значению) — единственная user-видимая record-форма в v1,
+порождаемая исключительно сигнатурой плагина из манифеста. Доступ к полям через
+`.` (`dec.wire_len`); типизируется статически, несуществующее поле →
+`TypeError::NoSuchField`. Реализует C9.
 
-**Trade-offs**
-- Два конструкта вместо одного
-- Устраняет неоднозначность datagram/stream
-- `bytes[EOF]` только в stream, только последнее поле
-
-Принято в ADR-002.
+> Решение о `bytes[EOF]` semantics split (C1) ранее занимало этот слот, но оно
+> полностью покрыто в **ADR-002 (Surface Syntax, секция C1)** как часть
+> консолидированных corrections C1–C8. Отдельной ADR-009 для EOF-split нет.
 
 ---
 
@@ -209,6 +219,10 @@ endpoint keys + опциональная directionality.
 
 ## Итог
 
-Приняты: ADR-002, ADR-009 (детальные), ADR-001,003–008,010–012 (этот документ).
+Детальные ADR (отдельные файлы):
+- **ADR-002** — Surface Syntax v1: Corrections (C1–C8) → `ADR-002-surface-syntax-corrections.md`
+- **ADR-009** — Record Types for Plugin Results (C9) → `ADR-009-plugin-record-types.md`
+
+Inline-резюме в этом документе: ADR-001, ADR-003–008, ADR-010–012.
 
 Остались open: root-binding, plugin-stall mitigation, resync-политика stream. Решить до соответствующих milestone.

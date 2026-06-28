@@ -23,8 +23,8 @@ fn full_parse_and_fsm_integration() {
 fn full_context_from_fields_affects_fsm() {
     let src = include_str!("../../../docs/examples/radius.nfdl");
 
-    // Sample data with code=1
-    let mut data = vec![1u8, 42, 0, 44];
+    // Sample RADIUS Access-Request: code=1, id=42, length=22 (real size 4+16+2), auth, 1 attr.
+    let mut data = vec![1u8, 42, 0, 22];
     data.extend_from_slice(&[0xAA; 16]);
     data.extend_from_slice(&[0, 2]);
 

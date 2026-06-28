@@ -1,33 +1,30 @@
-# N-FDL v1 — Network Format Description Language
+# N-FDL v1 — язык описания сетевых форматов
 
-N-FDL is a declarative language for describing binary network protocols + an execution engine (bytecode VM + EFSM) that can parse, validate, and drive state machines over real traffic.
+**N-FDL** (Network Format Description Language) — декларативный язык описания бинарных сетевых протоколов и среда выполнения (виртуальная машина байткода + расширенный конечный автомат, EFSM), которая разбирает трафик, проверяет ограничения и управляет автоматами сессий.
 
-## Key Capabilities (Current)
+## Возможности (текущая версия)
 
-- **Parser**: Full support for fields, dependent lengths (`bytes[length-2]`), `let` bindings, `__current_offset`, `loop ... while (expr)`, `MessageRef` (inline structs), and `state_machine { ... on Msg guard (...) -> State { set ...; emit ...; } }`.
-- **Bytecode VM**: Generates and executes compact bytecode. Supports loops via jumps, arithmetic/boolean expressions, dynamic lengths.
-- **Runner**: Executes protocols end-to-end. Builds rich context from fields/lets/loops. Integrates with EFSM.
-- **EFSM**: Real guard evaluation + action execution (`set` updates flow variables, `emit` produces events). State transitions (e.g. IDLE → PENDING on RADIUS `code == 1`).
-- **Safety**: Instruction limits, recursion depth limits for MessageRef, context size limits.
-- **Examples**: Full working support for `radius.nfdl` (with loops + Attribute refs + state machine) and others.
+- **Парсер**: поля, длины, зависящие от выражений (`bytes[length-2]`), локальные определения `let`, `__current_offset`, циклы `loop ... while (expr)`, вложенные сообщения (`MessageRef`), автоматы `state_machine { ... on Msg guard (...) -> State { set ...; emit ...; } }`.
+- **Виртуальная машина байткода**: генерация и выполнение компактного байткода; циклы через переходы, арифметические и логические выражения, переменные длины полей.
+- **Исполнитель (runner)**: сквозной разбор протокола; контекст из полей, `let` и циклов; интеграция с EFSM.
+- **EFSM**: вычисление охранных условий переходов и действий (`set` — переменные потока, `emit` — события); смена состояний (например, IDLE → PENDING при RADIUS `code == 1`).
+- **Ограничения ресурсов**: лимиты числа инструкций, глубины рекурсии `MessageRef`, размера контекста.
+- **Примеры**: полная поддержка `radius.nfdl` (циклы, ссылки на `Attribute`, автомат состояний) и других протоколов из `docs/examples/`.
 
-See `PRODUCTION_CHECKLIST.md` for detailed checklist and roadmap.
+Подробный контрольный список и план развития — в `PRODUCTION_CHECKLIST.md`.
 
-## Quick Start
+## Быстрый старт
 
 ```bash
-# Build & run (example using nfdl-cli if available)
 cargo build -p nfdl-cli
 
-# Parse and inspect
 cargo run -p nfdl-cli -- radius.nfdl
 
-# Run tests (including real radius e2e)
 cargo test -p nfdl-syntax
 cargo test -p nfdl-runtime --test fsm_integration -- --nocapture
 ```
 
-## Example: RADIUS state machine (excerpt from radius.nfdl)
+## Пример: автомат RADIUS (фрагмент `radius.nfdl`)
 
 ```nfdl
 let attrs_len = length - 20;
@@ -51,37 +48,37 @@ state_machine AuthDialog {
 }
 ```
 
-The engine will:
-1. Execute the loop + MessageRef inlining via bytecode.
-2. Build context with `code`, `authenticator`, `attrs_len`, etc.
-3. Evaluate guard → fire transition + execute `set`.
-4. Return final state + events.
+Движок:
 
-## Architecture Highlights
+1. выполняет цикл и разворачивает `MessageRef` в байткод;
+2. собирает контекст (`code`, `authenticator`, `attrs_len` и т.д.);
+3. проверяет охранное условие → выполняет переход и `set`;
+4. возвращает итоговое состояние и события.
 
-- **Lexer + Parser** (`nfdl-syntax`): Real recursive descent, supports modern NFDL syntax.
-- **Bytecode** (`nfdl-runtime`): `Instruction` + `BytecodeVm` (IP execution, no interpretation overhead in hot path).
-- **Runner + EFSM**: `parse_and_run_with_data` → VM → ctx → `FsmEngine::feed`.
-- **Limits & Errors**: `RuntimeError::LimitExceeded`, depth guards, etc. (improving in v1.5).
-- **No unsafe** in core crates.
+## Архитектура
 
-## Production v1 Progress
+- **Лексер и парсер** (`nfdl-syntax`): рекурсивный спуск, актуальный синтаксис N-FDL.
+- **Байткод** (`nfdl-runtime`): `Instruction` + `BytecodeVm` (выполнение по указателю команд, без интерпретации на критическом участке).
+- **Исполнитель и EFSM**: `parse_and_run_with_data` → VM → контекст → `FsmEngine::feed`.
+- **Лимиты и ошибки**: `RuntimeError::LimitExceeded`, ограничение глубины (доработка в v1.5).
+- В ядре — без `unsafe`.
 
-Core execution pipeline (parser → bytecode → VM → rich ctx → EFSM actions) is functional and tested on real protocols.
+## Статус v1
 
+Рабочий конвейер: парсер → байткод → VM → контекст → действия EFSM; покрыт тестами на реальных протоколах.
 
-## Roadmap Summary
+## План развития
 
-- **v1 (current)**: Core parser + VM + EFSM + basic limits + state machines.
-- **v1.5**: Proper error model, safety hardening, test coverage, multi-message support.
-- **v2**: Production features (reassembly integration, fuzz campaigns, formal methods, high performance).
+- **v1** (текущая): парсер, VM, EFSM, базовые лимиты, автоматы состояний.
+- **v1.5**: типизированная модель ошибок, усиление защиты, покрытие тестами, несколько типов сообщений.
+- **v2**: сборка потоковых сегментов, фаззинг, формальные методы, производительность.
 
-## Contributing / Running
+## Сборка и тесты
 
-- Workspace: `nfdl-syntax`, `nfdl-runtime`, `nfdl-verify`, `nfdl-fuzz`, `nfdl-cli`.
-- Focused tests: `fsm_integration` for full pipeline.
-- Always export cargo path if needed: `export PATH="$HOME/.cargo/bin:$PATH"`
+- Рабочее пространство Cargo: `nfdl-syntax`, `nfdl-runtime`, `nfdl-verify`, `nfdl-fuzz`, `nfdl-cli`.
+- Сквозной тест: `fsm_integration`.
+- При необходимости: `export PATH="$HOME/.cargo/bin:$PATH"`.
 
-For detailed status and next steps, see `PRODUCTION_CHECKLIST.md`.
+Актуальный статус — в `PRODUCTION_CHECKLIST.md`.
 
-**Ready for research use and incremental production hardening.**
+**Готово к исследовательскому использованию и поэтапной подготовке к промышленной эксплуатации.**

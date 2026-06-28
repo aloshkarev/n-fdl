@@ -1,0 +1,20 @@
+// Rule 9 — STP topology change + retrans burst -> transient L2 disruption.
+// correlate window is purely backward [rtx.time - 2s, rtx.time] => no future
+// window => no WaitQueue suspension (08-stream-watermarking §3.1); the rule
+// executes immediately on anchor match.
+ruleset "airpulse.l2_diagnostics" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    evidence stp_tcp_burst {
+        scope: Session
+        anchor rtx: event(tcp.retransmission_burst)
+        correlate stp: event(stp.topology_change) {
+            topo: same_vlan(rtx.vlan, stp.vlan)
+            time: stp.time in [rtx.time - 2s, rtx.time]
+        }
+        if present(stp) {
+            infer Cause(TransientL2Disruption) { target: rtx.target, weight: +80, evidence: [stp, rtx] }
+        }
+    }
+}

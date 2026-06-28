@@ -1,0 +1,15 @@
+// Rule 2 — one cause -> multiple problems.
+// Cause(AuthServerOutage) lives in Vlan scope. It is roll-up'd there from
+// ClientMac evidence (see 04-dhcp-missing-auth.adgl). Cross-scope aggregation
+// is MAX, not sum (ADR-003, 09-scopes-sessions §3).
+ruleset "airpulse.aaa_diagnostics" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    decision auth_outage_impact {
+        scope: Vlan
+        anchor c: Cause(AuthServerOutage) { c.confidence >= 80 }
+        emit Problem(ClientOnboardingFailure) { target: c.target, severity: High,     evidence: [c], sarif_id: "l3_dot1x_wired" }
+        emit Problem(WlanRadiusOutage)        { target: c.target, severity: Critical, evidence: [c], sarif_id: "ap_wlan_radius_outage" }
+    }
+}
