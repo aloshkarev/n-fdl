@@ -45,7 +45,7 @@ protocol TCP {
     }
 
     state_machine Connection {
-        // C10: sort the endpoint tuple atomically so IP/port pairs stay coupled.
+        // C4/C10: sort the endpoint tuple atomically so IP/port pairs stay coupled.
         key = bidir_tuple((IPv4.src, src_port), (IPv4.dst, dst_port));
 
         state CLOSED {

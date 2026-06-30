@@ -42,6 +42,8 @@ field-уровень:  let  validate  match  case  default  loop  carry  while  
 типы:           u8 u16 u24 u32 u48 u64  i8 i16 i32 i64  bool  bitfield  bytes  str  opaque
 layer/fsm:      bind  payload  to  when  state_machine  key  state  on  guard
 actions:        emit  set  start_timer  cancel_timer
+session:        bidir  bidir_tuple
+meta-литералы:  big  little  on_fin  on_close
 литералы:       true  false
 ```
 
@@ -52,12 +54,22 @@ actions:        emit  set  start_timer  cancel_timer
 ### 3.2. Builtins (контекстные идентификаторы, не ключевые слова)
 
 ```
-__root_buffer  __current_offset  __root_offset  __rem  __count
+__root_buffer  __current_offset  __root_offset  __rem  __count  __session
 ```
 
 Лексически — обычные идентификаторы с префиксом `__`. Префикс `__` зарезервирован:
 пользовательские идентификаторы **не могут** начинаться с `__`
 (`SyntaxError: '__' prefix is reserved`). Это отделяет namespace builtins.
+
+### 3.3. Контекстные slice-length ключи (только внутри `bytes[...]`)
+
+```
+EOF     // stream-end sentinel (C1); uppercase, distinct from meta keyword `eof`
+stream  // chunked stream sink (C1); not a general identifier in slice position
+```
+
+В позиции `bytes[LEN]` лексер распознаёт `EOF` и `stream` как отдельные
+токены (не `Ident`). Вне `bytes[...]` они не используются.
 
 ## 4. Числовые литералы
 
@@ -97,6 +109,8 @@ escape      ::= '\' ( '"' | '\' | 'n' | 't' | 'r' | '0' | "x" hex_digit hex_digi
 ==  !=  <   <=  >   >=
 // логика
 &&  ||  !
+// null-coalesce (C5 expr guards, optional chaining)
+??
 // тернарный
 ?   :
 // структура
@@ -117,18 +131,19 @@ escape      ::= '\' ( '"' | '\' | 'n' | 't' | 'r' | '0' | "x" hex_digit hex_digi
 
 ```
 1  ? :            (тернарный, право-ассоц.)
-2  ||
-3  &&
-4  |
-5  ^
-6  &
-7  == !=
-8  < <= > >=
-9  << >>
-10 + -
-11 * / %
-12  унарные: ! ~ - (унарный минус)
-13 . (qualified)  ()-вызов  []-индекс/length-форма
+2  ??             (null-coalesce, лево-ассоц.; lower than ?:)
+3  ||
+4  &&
+5  |
+6  ^
+7  &
+8  == !=
+9  < <= > >=
+10 << >>
+11 + -
+12 * / %
+13  унарные: ! ~ - (унарный минус)
+14 . (qualified)  ()-вызов  []-индекс/length-форма
 ```
 
 Скобки `( )` переопределяют приоритет. Все бинарные операторы лево-ассоциативны,
@@ -160,7 +175,7 @@ escape      ::= '\' ( '"' | '\' | 'n' | 't' | 'r' | '0' | "x" hex_digit hex_digi
 TokenKind =
   | Ident(Symbol) | Keyword(Kw) | Builtin(BuiltinId)
   | IntLit(i64) | StringLit(Box<str>) | BoolLit(bool)
-  | Op(Op)              // + - * / % << >> & | ^ ~ == != < <= > >= && || ! ? :
+  | Op(Op)              // + - * / % << >> & | ^ ~ == != < <= > >= && || ! ?? ? :
   | Punct(Punct)        // { } ( ) [ ] ; , . = -> => .. :
   | Eof
 ```

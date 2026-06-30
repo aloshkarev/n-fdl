@@ -10,7 +10,8 @@
      "lit"     terminal literal
      UPPER     lexical token from 01-lexical.md (IDENT, INT, STRING, BOOL)
    ----------------------------------------------------------------------------
-   This grammar realises ADR-002 (corrections C1-C8). It is LL(2)-parseable:
+   This grammar realises ADR-002 (corrections C1–C10), ADR-009 (C9 invoke
+   record access), and ADR-008 (session keys). It is LL(2)-parseable:
    field-vs-let-vs-validate disambiguated by leading keyword; the only 2-token
    lookahead is "IDENT ':'" (field) vs bare expression contexts (none at stmt
    level, so effectively LL(1)).
@@ -75,7 +76,7 @@ LoopStmt      = "loop" IDENT
                 "while" Expr
                 "{" { Statement } { NextStmt } "}" ;
 
-CarryDecl     = "carry" IDENT ":" Type "=" Expr ;       (* init from C_loc / outer carries *)
+CarryDecl     = "carry" IDENT ":" Type "=" Expr [ ";" ] ;   (* init; trailing ; optional *)
 NextStmt      = "next" IDENT "=" Expr ";" ;             (* update carry for next iteration   *)
 
 (* ----- 4. Types ------------------------------------------------------------*)

@@ -81,7 +81,7 @@ invoke-pure/record-field-access), вычисляется на operand-стеке
 ```
 BoundsProof  = Proven | RuntimeCheck(reason)     // Proven -> нет BOUNDS_CHECK в bytecode
 ProgressMode = ProgressProven | RuntimeGuard     // RuntimeGuard -> consumed-check на back-edge
-LayerKind    = Flat | Recursive                  // Recursive -> runtime depth/shrink enforcement
+LayerKind    = Flat | Recursive   // Recursive: runtime enforces max_layer_depth + shrink (C7)
 ```
 
 ## 3. Control-flow модель
@@ -277,8 +277,8 @@ on new_contiguous_bytes(flow):
 ```
 
 Идемпотентность: повторный resume с тем же буфером даёт тот же результат
-(детерминизм). Свойство `resume-equivalence` (testing §13): произвольная
-сегментация потока ≡ цельный разбор.
+(детерминизм). Свойство `resume-equivalence` (`12-testing.md` §1.5 property 5):
+произвольная сегментация потока ≡ цельный разбор.
 
 ### 5.4 Где YIELD вставляется компилятором
 
