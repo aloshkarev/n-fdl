@@ -223,7 +223,10 @@ PAYLOAD_CHUNK { flow_key, dir, offset, bytes }
 FIN. `bytes[stream]` должно быть последним полем сообщения, не создаёт `bytes`
 в AST и не может использоваться в выражениях.
 
-## 7. Root protocol binding (Open Question, до M0)
+## 7. Root protocol binding (M1 — open)
+
+**Status:** отложено до M1 (см. [13-roadmap.md](13-roadmap.md) M1). M0 examples
+используют внешние root-слои (`Ethernet`, `IPv4`) как declaration-only bind.
 
 Dispatcher выбирает корневой парсер по link-type источника:
 - PCAP: link-type из глобального заголовка (Ethernet=1, raw IP=101, ...).

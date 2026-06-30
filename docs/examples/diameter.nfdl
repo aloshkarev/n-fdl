@@ -3,6 +3,8 @@
 // Demonstrates: u24, conditional field (vendor_id), ternary, match producing
 // distinct branch layouts (union), modular padding arithmetic proven by the
 // interval analyzer's modulo axiom, stream mode message framing.
+// Note: mode=stream because Diameter rides TCP byte-stream delivery; messages are
+// length-prefixed (no bytes[EOF]). meta.eof reserved for future stream-end policies.
 // ============================================================================
 
 protocol Diameter {

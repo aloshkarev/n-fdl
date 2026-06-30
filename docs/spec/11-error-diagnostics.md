@@ -78,6 +78,27 @@ help: add `validate length >= 20 -> "..."` before this field, or the access will
 Несколько ошибок собираются батчем (не падаем на первой) и сортируются по span.
 `DiagId` стабилен → можно документировать каждый код и подавлять warnings адресно.
 
+### 2.1. Стабильные коды AOT (NFDL04xx)
+
+| DiagId | Error variant | Severity | Когда |
+|---|---|---|---|
+| NFDL0401 | RedefinitionOfBinding | Error | повторный `let`/`carry` в scope (C2) |
+| NFDL0402 | CyclicDependency | Error | SCC > 1 в field-DAG |
+| NFDL0403 | ForwardReference | Error | использование до объявления |
+| NFDL0404 | NegativeLength | Error | `bytes[e]` с отрицательной длиной |
+| NFDL0405 | StreamRemControlFlow | Error | `bytes[..]`/`bytes[EOF]` в stream без guard |
+| NFDL0406 | UnknownPlugin | Error | `invoke("p")` без manifest |
+| NFDL0407 | PluginArity | Error | неверное число аргументов invoke |
+| NFDL0408 | ParentLayerNotInScope | Error | `Proto.field` вне bind-графа (C3) |
+| NFDL0409 | SinkState | Error | FSM без исходящих переходов |
+| NFDL0410 | BidirEndpointSplit | Error | независимая сортировка IP/портов (C10) |
+| NFDL0411 | UnknownMessage | Error | `MessageRef` на неизвестное сообщение |
+| NFDL0412 | BoundsUnderflow | Warning/Note | interval не доказал `e >= 0` (C5 downgrade) |
+
+Runtime safety codes (`NFDL08xx`) — см. [dos-vectors.md](../plans/dos-vectors.md).
+M0 `nfdl-verify` может эмитить legacy `NFDV01`/`NFDV02` notes; целевой маппинг —
+`NFDL0412` (см. [05-verification.md](05-verification.md) §1 M0 subset).
+
 ## 4. Runtime-диагностика (per-packet)
 
 При `Malformed`/`ConstraintError`/`PluginError` ядро НЕ падает, а эмитит
@@ -138,17 +159,19 @@ bytes-поля и str по умолчанию не сериализуются в
 Тип сообщения, layer-path, state-transitions, диагностик-коды, timestamps,
 размеры, anomaly-типы. Этого достаточно для мониторинга/IDS без PII.
 
-## 7. Маппинг runtime-ошибок на DoS-защиты (связь с 12 плана)
+## 7. Маппинг runtime-ошибок на DoS-защиты
 
-| RuntimeSafetyAbort/Malformed подвид | Триггер | Защита |
-|---|---|---|
-| NonProgressLoop | loop потребил 0 байт | 05 §5.2, VM consumed-check |
-| LoopLimit | > max_loop_iterations | 08/конфиг |
-| MaxDepthExceeded | bind-рекурсия > max_layer_depth | 07 §10, C7 |
-| ReassemblyLimit | flow-буфер > лимита | 08 §6 |
-| SessionLimit | > max_sessions | 09 §6.2 LRU |
-| PluginTimeout | FFI > time-budget | 10 §6.2 |
-| CompressionBomb | output > ratio cap | 10 §6.2 |
+Полный каталог векторов и `DiagId`: [dos-vectors.md](../plans/dos-vectors.md).
+
+| RuntimeSafetyAbort/Malformed подвид | DiagId | Триггер | Защита |
+|---|---|---|---|
+| NonProgressLoop | NFDL0801 | loop потребил 0 байт | 05 §5.2, VM consumed-check |
+| LoopLimit | NFDL0802 | > max_loop_iterations | 08/конфиг |
+| MaxDepthExceeded | NFDL0803 | bind-рекурсия > max_layer_depth | 07 §10, C7 |
+| ReassemblyLimit | NFDL0804 | flow-буфер > лимита | 08 §6 |
+| SessionLimit | NFDL0805 | > max_sessions | 09 §6.2 LRU |
+| PluginTimeout | NFDL0806 | FFI > time-budget | 10 §6.2 |
+| CompressionBomb | NFDL0807 | output > ratio cap | 10 §6.2 |
 
 Все → безопасное прерывание + diagnostic/anomaly-событие, никогда не паника/OOM.
 

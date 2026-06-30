@@ -113,6 +113,19 @@ enum Value<'pkt> {
 }
 ```
 
+**Mapping `loop_result` (04 §5.6):** Typed AST хранит
+`loop_result{ items: list[τ], carries: record{...} }`. Runtime представление —
+`Value::List` для `items` плюс carry-слоты во frame state (`carries: HashMap<Sym, Value>`).
+Human-readable вывод может сворачивать в `name.items`; verifier использует полную форму.
+
+```rust
+// conceptual — not a separate Value variant in v1
+struct LoopResult<'pkt> {
+    items: ArenaVec<'pkt, Value<'pkt>>,
+    carries: HashMap<Sym, Value<'pkt>>,
+}
+```
+
 - Скаляры — по значению (u64/i64/bool); arith-checked на уровне VM.
 - `Bytes` несёт `'pkt` → не переживёт буфер (для stream `'pkt` фактически
   привязан к жизни `Bytes` через `Shared`-вариант — handle живёт пока жив clone).

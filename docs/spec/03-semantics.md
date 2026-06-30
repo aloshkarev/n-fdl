@@ -72,7 +72,7 @@ eval(c, Env) = true    =>   читаем T:
 
 Тип условного поля — `Option<T>`; последующие выражения, использующие `f`,
 типизируются с учётом возможного отсутствия (verifier требует, чтобы зависящие
-длины были корректны в обеих ветках, см. §3 verification.md).
+длины были корректны в обеих ветках, см. `05-verification.md` §4).
 
 ### 3.2 LetStmt `let x = e ;`
 
@@ -156,7 +156,7 @@ out = ffi_call(p, __root_buffer, __root_offset, vals)
 1. Loop-iteration scope   : поля итерации + carry-переменные + __count
 2. Message-local C_loc     : field/let, объявленные ТЕКСТУАЛЬНО ВЫШЕ точки исп.
 3. Builtins                : __root_buffer __current_offset __root_offset __rem __count
-4. Parent layer C_parent   : ТОЛЬКО quailfied form  Proto.field  (не bare)
+4. Parent layer C_parent   : ТОЛЬКО qualified form  Proto.field  (не bare)
 5. Session C_sess           : ТОЛЬКО внутри FSM guard/action (set/чтение)
 ```
 
@@ -217,7 +217,7 @@ guard/action читают/пишут `C_sess`. Парсер не может чи
 - **lookahead = 0**: ветвление только по уже вычисленным значениям; парсер
   никогда не «заглядывает вперёд» в непрочитанные байты.
 - Один и тот же `(B*, Env)` всегда даёт идентичный результат (property:
-  deterministic parse, см. testing §13).
+  deterministic parse, см. `12-testing.md` §1.5 property 2).
 
 ## 6. Завершаемость (termination)
 
