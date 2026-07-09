@@ -1,0 +1,57 @@
+---
+source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+assertion_line: 269
+expression: snap
+---
+Snapshot {
+    causes: [
+        CauseView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: CauseKind(
+                "TransientL2Disruption",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                30000,
+            ),
+            confidence: Confidence(
+                80,
+            ),
+        },
+    ],
+    problems: [
+        ProblemView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: ProblemKind(
+                "AmbiguousDiagnosis",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                30000,
+            ),
+            severity: Medium,
+            sarif_id: SarifId(
+                "ap_ambiguous",
+            ),
+            cause_kinds: [
+                CauseKind(
+                    "TransientL2Disruption",
+                ),
+            ],
+            superseded: false,
+        },
+    ],
+    audit: [],
+}

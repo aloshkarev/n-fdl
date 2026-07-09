@@ -1,0 +1,11 @@
+[package]
+name = "airpulse_dsl-fuzz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+airpulse_dsl-syntax = { path = "../airpulse_dsl-syntax" }
+airpulse_dsl-verify = { path = "../airpulse_dsl-verify" }
+
+[dev-dependencies]
+proptest = "1.4"

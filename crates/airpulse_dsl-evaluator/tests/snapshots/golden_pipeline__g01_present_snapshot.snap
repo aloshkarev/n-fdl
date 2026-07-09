@@ -1,0 +1,56 @@
+---
+source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+expression: snap
+---
+Snapshot {
+    causes: [
+        CauseView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: CauseKind(
+                "PmtudBlackhole",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                10000,
+            ),
+            confidence: Confidence(
+                85,
+            ),
+        },
+    ],
+    problems: [
+        ProblemView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: ProblemKind(
+                "XlIcmpTcpMss",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                11401,
+            ),
+            severity: High,
+            sarif_id: SarifId(
+                "l3_pmtud_blackhole",
+            ),
+            cause_kinds: [
+                CauseKind(
+                    "PmtudBlackhole",
+                ),
+            ],
+            superseded: false,
+        },
+    ],
+    audit: [],
+}

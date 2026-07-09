@@ -1,5 +1,13 @@
 [workspace]
 members = [
+    "crates/airpulse_dsl-fuzz",
+    "crates/airpulse_dsl-catalog",
+    "crates/airpulse_dsl-evaluator",
+    "crates/airpulse_dsl-ir",
+    "crates/airpulse_dsl-store",
+    "crates/airpulse_dsl-syntax",
+    "crates/airpulse_dsl-types",
+    "crates/ndsl-diag",
     "crates/nfdl-fuzz",
     "crates/nfdl-syntax",
     "crates/nfdl-types",
@@ -9,7 +17,7 @@ members = [
     "crates/nfdl-vm",
     "crates/nfdl-runtime",
     "crates/nfdl-diag",
-    "crates/nfdl-cli",
+    "crates/nfdl-cli", "crates/airpulse_dsl-verify",
 ]
 resolver = "2"
 
@@ -20,4 +28,8 @@ license = "MIT"
 authors = ["Aleksandr Loshkarev <mailbox@aloshkarev.com>"]
 
 [workspace.dependencies]
+dashmap = "6"
+winnow = "0.7"
+insta = "1"
+ariadne = "0.4"
 # общие зависимости позже

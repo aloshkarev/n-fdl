@@ -1,0 +1,9 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.tcp_seed
+evidence:tcp_retrans_seed scope=Session anchor=event(tcp.retransmission_burst) correlates=0
+  infer:Congestion
+  infer:PmtudBlackhole
+  infer:TransientL2Disruption

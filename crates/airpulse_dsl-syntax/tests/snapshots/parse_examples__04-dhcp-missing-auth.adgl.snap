@@ -1,0 +1,6 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.aaa_diagnostics
+evidence:dhcp_timeout_missing_auth scope=ClientMac anchor=event(dhcp.timeout) correlates=2

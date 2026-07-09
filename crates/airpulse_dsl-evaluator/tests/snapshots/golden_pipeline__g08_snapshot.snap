@@ -1,0 +1,111 @@
+---
+source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+expression: snap
+---
+Snapshot {
+    causes: [
+        CauseView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: CauseKind(
+                "Congestion",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                50000,
+            ),
+            confidence: Confidence(
+                45,
+            ),
+        },
+        CauseView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: CauseKind(
+                "PmtudBlackhole",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                50000,
+            ),
+            confidence: Confidence(
+                45,
+            ),
+        },
+    ],
+    problems: [
+        ProblemView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: ProblemKind(
+                "AmbiguousDiagnosis",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                50000,
+            ),
+            severity: Medium,
+            sarif_id: SarifId(
+                "ap_ambiguous",
+            ),
+            cause_kinds: [
+                CauseKind(
+                    "PmtudBlackhole",
+                ),
+                CauseKind(
+                    "Congestion",
+                ),
+            ],
+            superseded: false,
+        },
+    ],
+    audit: [
+        AuditEntry {
+            code: None,
+            intent: ActionIntent {
+                kind: MarkAmbiguous,
+                rule: RuleId(
+                    "airpulse.ambiguity_demo",
+                ),
+                arg: None,
+                target: Some(
+                    ScopeId {
+                        scope_type: Session,
+                        key: 16279356027259440662,
+                    },
+                ),
+                target_path: None,
+                reason: None,
+                evidence: [],
+                causes: Some(
+                    (
+                        CauseKind(
+                            "Congestion",
+                        ),
+                        CauseKind(
+                            "PmtudBlackhole",
+                        ),
+                    ),
+                ),
+            },
+            wm: EventTime(
+                50000,
+            ),
+        },
+    ],
+}

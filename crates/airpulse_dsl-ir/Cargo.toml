@@ -1,0 +1,8 @@
+[package]
+name = "airpulse_dsl-ir"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }

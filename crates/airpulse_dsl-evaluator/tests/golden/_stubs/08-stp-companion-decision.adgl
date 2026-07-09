@@ -1,0 +1,10 @@
+decision stp_tcp_burst_companion_verdict {
+    scope: Session
+    anchor c: Cause(TransientL2Disruption) { c.confidence >= 80 }
+    emit Problem(AmbiguousDiagnosis) {
+        target: c.target,
+        severity: Medium,
+        evidence: [c],
+        sarif_id: "ap_ambiguous"
+    }
+}

@@ -1,0 +1,6 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.port_diagnostics
+evidence:link_absent scope=Port anchor=event(port.admin_state) correlates=1

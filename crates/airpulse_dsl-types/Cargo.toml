@@ -1,0 +1,7 @@
+[package]
+name = "airpulse_dsl-types"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]

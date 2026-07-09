@@ -1,0 +1,16 @@
+[package]
+name = "airpulse_dsl-evaluator"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }
+airpulse_dsl-ir = { path = "../airpulse_dsl-ir" }
+airpulse_dsl-store = { path = "../airpulse_dsl-store" }
+airpulse_dsl-catalog = { path = "../airpulse_dsl-catalog" }
+
+[dev-dependencies]
+insta = "1"
+airpulse_dsl-syntax = { path = "../airpulse_dsl-syntax" }
+airpulse_dsl-verify = { path = "../airpulse_dsl-verify" }

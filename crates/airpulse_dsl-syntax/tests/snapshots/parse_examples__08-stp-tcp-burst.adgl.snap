@@ -1,0 +1,6 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.l2_diagnostics
+evidence:stp_tcp_burst scope=Session anchor=event(tcp.retransmission_burst) correlates=1

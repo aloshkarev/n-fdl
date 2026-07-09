@@ -1,0 +1,17 @@
+[package]
+name = "airpulse_dsl-syntax"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "airpulse_dsl_syntax"
+path = "src/lib.rs"
+
+[dependencies]
+winnow = { workspace = true }
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }
+ndsl-diag = { path = "../ndsl-diag" }
+
+[dev-dependencies]
+insta = { workspace = true }

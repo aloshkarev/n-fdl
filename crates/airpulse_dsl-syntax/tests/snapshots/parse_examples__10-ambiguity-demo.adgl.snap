@@ -1,0 +1,9 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.ambiguity_demo
+evidence:seed_congestion scope=Session anchor=event(tcp.retransmission_burst) correlates=0
+  infer:Congestion
+evidence:seed_pmtud scope=Session anchor=event(tcp.retransmission_burst) correlates=0
+  infer:PmtudBlackhole

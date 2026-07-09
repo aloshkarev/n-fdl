@@ -1,0 +1,6 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.topo_suppression
+decision:suppress_downstream scope=Global anchor=Problem correlates=1

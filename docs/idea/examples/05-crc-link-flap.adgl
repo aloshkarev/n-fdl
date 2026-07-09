@@ -16,4 +16,10 @@ ruleset "airpulse.port_diagnostics" {
             infer Cause(PhysicalCableDamage) { target: crc.target, weight: +90, evidence: [crc, flap] }
         }
     }
+
+    decision cable_damage_verdict {
+        scope: Port
+        anchor c: Cause(PhysicalCableDamage) { c.confidence >= 80 }
+        emit Problem(CableDisconnected) { severity: High, evidence: [c], sarif_id: "ap_port_cable_disconnected" }
+    }
 }

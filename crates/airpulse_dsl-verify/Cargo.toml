@@ -1,0 +1,23 @@
+[package]
+name = "airpulse_dsl-verify"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "airpulse_dsl_verify"
+path = "src/lib.rs"
+
+[dependencies]
+airpulse_dsl-syntax = { path = "../airpulse_dsl-syntax" }
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }
+airpulse_dsl-ir = { path = "../airpulse_dsl-ir" }
+airpulse_dsl-catalog = { path = "../airpulse_dsl-catalog" }
+ndsl-diag = { path = "../ndsl-diag" }
+ariadne = { workspace = true }
+
+[dev-dependencies]
+airpulse_dsl-evaluator = { path = "../airpulse_dsl-evaluator" }
+airpulse_dsl-store = { path = "../airpulse_dsl-store" }

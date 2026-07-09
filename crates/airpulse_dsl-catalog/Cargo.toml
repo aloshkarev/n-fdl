@@ -1,0 +1,13 @@
+[package]
+name = "airpulse_dsl-catalog"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+name = "airpulse_dsl_catalog"
+path = "src/lib.rs"
+
+[dependencies]
+airpulse_dsl-ir = { path = "../airpulse_dsl-ir" }
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }

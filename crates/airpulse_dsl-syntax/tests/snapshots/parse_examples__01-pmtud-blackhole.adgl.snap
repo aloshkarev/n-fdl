@@ -1,0 +1,8 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.tcp_diagnostics
+evidence:pmtud_hypothesis scope=Session anchor=event(tcp.retransmission_burst) correlates=1
+decision:pmtud_verdict scope=Session anchor=Cause correlates=0
+  emit:XlIcmpTcpMss

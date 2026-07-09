@@ -1,0 +1,6 @@
+---
+source: crates/airpulse_dsl-syntax/tests/parse_examples.rs
+expression: summary
+---
+ruleset:airpulse.wifi_diagnostics
+evidence:ap_deauth_missing_rf scope=AccessPoint anchor=event(wifi.deauth_burst) correlates=1

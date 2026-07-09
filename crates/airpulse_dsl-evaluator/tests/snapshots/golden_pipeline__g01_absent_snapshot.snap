@@ -1,0 +1,58 @@
+---
+source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+expression: snap
+---
+Snapshot {
+    causes: [
+        CauseView {
+            scope: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            kind: CauseKind(
+                "PmtudBlackhole",
+            ),
+            target: ScopeId {
+                scope_type: Session,
+                key: 16279356027259440662,
+            },
+            time: EventTime(
+                10000,
+            ),
+            confidence: Confidence(
+                35,
+            ),
+        },
+    ],
+    problems: [],
+    audit: [
+        AuditEntry {
+            code: Some(
+                "ADGL3001",
+            ),
+            intent: ActionIntent {
+                kind: RequestObservation,
+                rule: RuleId(
+                    "pmtud_hypothesis",
+                ),
+                arg: Some(
+                    Symbol(
+                        "icmp.visibility",
+                    ),
+                ),
+                target: None,
+                target_path: Some(
+                    MetricPath(
+                        "rtx.path",
+                    ),
+                ),
+                reason: None,
+                evidence: [],
+                causes: None,
+            },
+            wm: EventTime(
+                11001,
+            ),
+        },
+    ],
+}

@@ -269,7 +269,11 @@ vs legacy и стабильные SARIF.
 
 ## Итог
 
-Приняты все ADR-001..ADR-012 (этот документ + детальные файлы). Correction-IDs
-`C1..C12` использованы в grammar/semantics/verification. Открытых вопросов на
-момент spec v1 нет; всё из critical-analysis закрыто (см.
-[plans/correctness-refinements.md](../plans/correctness-refinements.md)).
+Приняты ADR-001..ADR-012 (этот документ + детальные файлы). Correction-IDs
+`C1..C12` использованы в grammar/semantics/verification.
+
+Оставшиеся открытые вопросы (для human decision):
+- Trigger auto-retraction `Problem`: ADR-007 vs [03-semantics.md §3.4–3.5](../spec/03-semantics.md).
+- Где живёт cooldown duration для Problem: [03-semantics.md §3.4](../spec/03-semantics.md) vs ADR-011 `dedup_window`.
+- Политика `common_target` для cross-target ambiguity: [03-semantics.md §4](../spec/03-semantics.md).
+- Точное определение roll-up `parent_key/children`: [09-scopes-sessions.md §3](../spec/09-scopes-sessions.md).

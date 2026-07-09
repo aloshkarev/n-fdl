@@ -61,7 +61,7 @@ phases — [plans/implementation-phases.md](../plans/implementation-phases.md).
 
 **Deliverables**
 - winnow parser (02-grammar) — zero-copy (`&str`/`Partial`).
-- `airpulse_dsl::verify` — все 10 фаз (05 §1), ariadne `ADGL####` errors.
+- `airpulse_dsl::verify` — все 12 фаз (05 §1), ariadne `ADGL####` errors.
 - Privacy strict-redaction (10 §11, ADR-009).
 - Differential harness vs legacy flat-TOML.
 

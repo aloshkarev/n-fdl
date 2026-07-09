@@ -1,0 +1,10 @@
+[package]
+name = "airpulse_dsl-store"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }
+airpulse_dsl-ir = { path = "../airpulse_dsl-ir" }
+dashmap = { workspace = true }
