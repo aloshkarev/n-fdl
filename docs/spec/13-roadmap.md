@@ -37,7 +37,7 @@ Milestones с deliverables, acceptance criteria и рисками. Каждый 
 - UDP/DNS golden (Ethernet→IP→UDP→DNS трасса).
 
 **Acceptance**
-- Полная трасса §10 appendix проходит.
+- Полная UDP/DNS трасса: [10-plugin-abi.md](10-plugin-abi.md) §7 + [udp_dns.nfdl](../examples/udp_dns.nfdl) + golden harness ([12-testing.md](12-testing.md) §1.2).
 - Plugin-loop-guard (max-jumps) работает.
 - Bounds-проверки на `length-8` (Proven где возможно).
 

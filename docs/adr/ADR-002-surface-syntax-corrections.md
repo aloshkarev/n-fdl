@@ -1,4 +1,4 @@
-# ADR-002 — N-FDL Surface Syntax v1: Corrections (C1–C8)
+# ADR-002 — N-FDL Surface Syntax v1: Corrections (C1–C10)
 
 - **Status:** Accepted (baseline for v1)
 - **Date:** 2026-06-25
@@ -11,11 +11,15 @@
 конструкции, которые расходятся с заявленной формальной моделью
 (монадический завершаемый парсинг + ациклический граф зависимостей полей +
 строгое разделение pure / effect). Если закодировать их «как есть», верификатор
-окажется внутренне противоречивым. Данный ADR фиксирует исправления C1–C8 как
+окажется внутренне противоречивым. Данный ADR фиксирует исправления C1–C10 как
 обязательный базис грамматики v1.
 
 Принцип разрешения конфликтов: **формальная модель — источник истины.
 Синтаксис подгоняется под модель, а не наоборот.**
+
+Correction-ID **C9** — plugin record types ([ADR-009](ADR-009-plugin-record-types.md)).
+Correction-ID **C10** — atomic endpoint session keys (см. §C10 ниже; детали в
+[ADR-list ADR-008](ADR-list-critical-decisions.md)).
 
 ---
 
@@ -31,10 +35,10 @@
   среза. Разрешён в `datagram` и в `stream`, когда длина среза детерминирована.
 - `bytes[EOF]` — **stream-end**: потребляет до сигнала EOF от runtime.
   Разрешён **только** в `mode=stream`; обязан быть **последним** полем
-  сообщения; протокол обязан объявить источник EOF в `meta` (см. C1-meta).
+  сообщения; протокол обязан объявить источник EOF в `meta` (см. **C1-meta** ниже).
   Нарушение — `VerificationError`.
 
-**meta-расширение для EOF-источника:**
+#### C1-meta — источник EOF в meta
 
 ```
 meta {
@@ -170,6 +174,19 @@ compile-warning. Z3 — опциональный verifier-backend за feature-f
   в loop-условиях, выражениях длины.
 - `__root_offset` — **абсолютное** смещение в root-буфере. Передаётся плагинам
   (DNS decompress) вместе с `__root_buffer`.
+
+---
+
+## C10 — Atomic endpoint session keys (`bidir_tuple`, C4 extension)
+
+**Проблема.** Независимая сортировка IP и портов в endpoint-ключе
+(`sort(ip_a,ip_b)` + `sort(port_a,port_b)`) даёт рассогласованные ключи
+(request/response не коррелируют).
+
+**Решение.** Формализует расширение C4: `bidir_tuple((a1, a2, ...), (b1, b2, ...))`
+с атомарной лексикографической сортировкой **целых endpoint-структур**.
+Verifier отвергает split-sort паттерны (`NFDL0410`). См.
+[ADR-008](ADR-list-critical-decisions.md).
 
 ---
 
