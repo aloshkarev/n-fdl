@@ -34,6 +34,57 @@ fn evt(id: u64, time_ms: i64, sc: ScopeId) -> EventNode {
     )
 }
 
+#[test]
+fn event_int_lists_are_sorted_deduplicated_and_bounded() {
+    let event = EventNode::new(
+        EventId::new(99),
+        EventType::new("wifi.deauth_burst"),
+        t(100),
+        ScopeId::access_point(1),
+        vec![(FieldIdx(2), 70)],
+        EventProvenance::default(),
+    )
+    .with_int_list_field(FieldIdx(4), (0..70).rev().chain([2, 1, 2]).collect());
+
+    assert_eq!(event.field(FieldIdx(2)), Some(70));
+    let clients = event
+        .int_list_field(FieldIdx(4))
+        .expect("client_macs sidecar");
+    assert_eq!(clients.len(), airpulse_dsl_store::MAX_EVENT_INT_LIST_VALUES);
+    assert!(clients.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(clients[0], 0);
+    assert_eq!(
+        clients[airpulse_dsl_store::MAX_EVENT_INT_LIST_VALUES - 1],
+        (airpulse_dsl_store::MAX_EVENT_INT_LIST_VALUES - 1) as i64
+    );
+}
+
+#[test]
+fn ring_clone_preserves_int_list_sidecar() {
+    let event = EventNode::new(
+        EventId::new(100),
+        EventType::new("wifi.deauth_burst"),
+        t(200),
+        ScopeId::access_point(2),
+        vec![],
+        EventProvenance::default(),
+    )
+    .with_int_list_field(FieldIdx(4), vec![3, 1, 3, 2]);
+    let cloned = event.clone();
+    assert_eq!(
+        cloned.int_list_fields(),
+        &[(FieldIdx(4), vec![1, 2, 3].into_boxed_slice())]
+    );
+    let mut ring = RingBuffer::new(ScopeId::access_point(2), 2);
+    assert!(ring.push(cloned).is_none());
+    assert_eq!(
+        ring.iter()
+            .next()
+            .and_then(|e| e.int_list_field(FieldIdx(4))),
+        Some(&[1, 2, 3][..])
+    );
+}
+
 fn pending(rule: &str, anchor: u64, upper_ms: i64, sc: ScopeId) -> PendingMatch {
     PendingMatch {
         rule: RuleId::new(rule),
@@ -68,10 +119,16 @@ fn ring_capacity_spill_drops_oldest_and_signals_adgl3005() {
     assert!(ring.push(evt(1, 100, scope())).is_none());
     assert!(ring.push(evt(2, 200, scope())).is_none());
 
-    let spill = ring.push(evt(3, 300, scope())).expect("full ring must spill");
+    let spill = ring
+        .push(evt(3, 300, scope()))
+        .expect("full ring must spill");
     assert_eq!(spill.code(), "ADGL3005");
     match spill {
-        StoreDiagnostic::RingBufferSpill { scope: sc, dropped, capacity } => {
+        StoreDiagnostic::RingBufferSpill {
+            scope: sc,
+            dropped,
+            capacity,
+        } => {
             assert_eq!(sc, scope());
             assert_eq!(dropped, EventId::new(1), "oldest (lowest time) is dropped");
             assert_eq!(capacity, 2);
@@ -93,8 +150,15 @@ fn ring_window_scan_is_inclusive_at_both_boundaries() {
         assert!(ring.push(evt(id, ms, scope())).is_none());
     }
     // anchor = 150, back = 50, fwd = 50 → window [100, 200].
-    let hits: Vec<u64> = ring.scan_window(t(150), d(50), d(50)).map(|e| e.id.raw()).collect();
-    assert_eq!(hits, vec![2, 3, 4], "100 and 200 inclusive; 99 and 201 excluded");
+    let hits: Vec<u64> = ring
+        .scan_window(t(150), d(50), d(50))
+        .map(|e| e.id.raw())
+        .collect();
+    assert_eq!(
+        hits,
+        vec![2, 3, 4],
+        "100 and 200 inclusive; 99 and 201 excluded"
+    );
 }
 
 #[test]
@@ -104,8 +168,10 @@ fn ring_window_scan_yields_events_earliest_first() {
     assert!(ring.push(evt(1, 300, scope())).is_none());
     assert!(ring.push(evt(2, 100, scope())).is_none()); // late
     assert!(ring.push(evt(3, 200, scope())).is_none()); // late
-    let hits: Vec<i64> =
-        ring.scan_window(t(200), d(200), d(200)).map(|e| e.time.millis()).collect();
+    let hits: Vec<i64> = ring
+        .scan_window(t(200), d(200), d(200))
+        .map(|e| e.time.millis())
+        .collect();
     assert_eq!(hits, vec![100, 200, 300]);
 }
 
@@ -121,7 +187,11 @@ fn ring_gc_evicts_strictly_older_than_cutoff() {
     let evicted = ring.gc(t(500), d(300));
     assert_eq!(evicted, 1);
     let ids: Vec<u64> = ring.iter().map(|e| e.id.raw()).collect();
-    assert_eq!(ids, vec![2, 3], "event at exactly the cutoff (200) survives");
+    assert_eq!(
+        ids,
+        vec![2, 3],
+        "event at exactly the cutoff (200) survives"
+    );
 }
 
 // ─── WaitQueue ──────────────────────────────────────────────────────────
@@ -149,8 +219,14 @@ fn waitqueue_boundary_wm_equal_upper_does_not_pop_wm_greater_pops() {
     let mut wq = WaitQueue::new(scope(), 8);
     assert!(wq.push(pending("r", 1, 500, scope())).is_none());
 
-    assert!(wq.pop_expired(t(499)).is_empty(), "wm < upper: still suspended");
-    assert!(wq.pop_expired(t(500)).is_empty(), "wm == upper: must NOT pop (08 §3.2)");
+    assert!(
+        wq.pop_expired(t(499)).is_empty(),
+        "wm < upper: still suspended"
+    );
+    assert!(
+        wq.pop_expired(t(500)).is_empty(),
+        "wm == upper: must NOT pop (08 §3.2)"
+    );
     assert_eq!(wq.len(), 1);
 
     let popped = wq.pop_expired(t(501));
@@ -167,10 +243,14 @@ fn waitqueue_capacity_spill_drops_largest_upper_bound() {
     assert!(wq.push(pending("r2", 2, 900, scope())).is_none());
 
     // New entry (500) is more urgent than the stored max (900): 900 spills.
-    let spill = wq.push(pending("r3", 3, 500, scope())).expect("full queue must spill");
+    let spill = wq
+        .push(pending("r3", 3, 500, scope()))
+        .expect("full queue must spill");
     assert_eq!(spill.code(), "ADGL3004");
     match &spill {
-        StoreDiagnostic::WaitQueueSpill { dropped, capacity, .. } => {
+        StoreDiagnostic::WaitQueueSpill {
+            dropped, capacity, ..
+        } => {
             assert_eq!(dropped.upper_bound, t(900), "least urgent is dropped");
             assert_eq!(*capacity, 2);
         }
@@ -182,11 +262,19 @@ fn waitqueue_capacity_spill_drops_largest_upper_bound() {
     let spill = wq.push(pending("r4", 4, 950, scope())).expect("must spill");
     match &spill {
         StoreDiagnostic::WaitQueueSpill { dropped, .. } => {
-            assert_eq!(dropped.upper_bound, t(950), "incoming least-urgent entry is dropped");
+            assert_eq!(
+                dropped.upper_bound,
+                t(950),
+                "incoming least-urgent entry is dropped"
+            );
         }
         other => panic!("expected WaitQueueSpill, got {other:?}"),
     }
-    let kept: Vec<i64> = wq.pop_expired(t(10_000)).iter().map(|p| p.upper_bound.millis()).collect();
+    let kept: Vec<i64> = wq
+        .pop_expired(t(10_000))
+        .iter()
+        .map(|p| p.upper_bound.millis())
+        .collect();
     assert_eq!(kept, vec![100, 500]);
 }
 
@@ -198,7 +286,11 @@ fn watermark_is_monotone_and_smaller_t_is_a_noop() {
     let store = GraphStore::new(Limits::default());
     assert_eq!(store.advance_watermark(t(100)), t(100));
     assert_eq!(store.watermark(), t(100));
-    assert_eq!(store.advance_watermark(t(50)), t(100), "smaller t is a no-op");
+    assert_eq!(
+        store.advance_watermark(t(50)),
+        t(100),
+        "smaller t is a no-op"
+    );
     assert_eq!(store.watermark(), t(100));
     assert_eq!(store.advance_watermark(t(200)), t(200));
     assert_eq!(store.watermark(), t(200));
@@ -216,10 +308,16 @@ fn store_pop_expired_respects_strict_boundary_across_scopes() {
     assert!(store.suspend(pending("r2", 2, 100, s2)).is_none());
     assert!(store.suspend(pending("r3", 3, 200, s1)).is_none());
 
-    assert!(store.pop_expired(t(100)).is_empty(), "wm == upper: nothing pops");
+    assert!(
+        store.pop_expired(t(100)).is_empty(),
+        "wm == upper: nothing pops"
+    );
     let popped = store.pop_expired(t(101));
     assert_eq!(popped.len(), 2, "both upper=100 entries pop at wm=101");
-    assert!(popped.windows(2).all(|w| w[0] <= w[1]), "deterministic sorted order");
+    assert!(
+        popped.windows(2).all(|w| w[0] <= w[1]),
+        "deterministic sorted order"
+    );
     assert_eq!(store.pending_len(s1), 1);
 }
 
@@ -303,8 +401,10 @@ fn flat_memory_ring_stays_bounded_under_10x_capacity_push() {
     // 07 §4 / 12 §property "flat memory": pushing 10x capacity through one
     // scope with an advancing watermark never grows the ring past capacity.
     let capacity = 64_usize;
-    let limits =
-        Limits { max_ringbuffer_events_per_scope: capacity, ..Limits::default() };
+    let limits = Limits {
+        max_ringbuffer_events_per_scope: capacity,
+        ..Limits::default()
+    };
     let store = GraphStore::new(limits);
     let sc = scope();
 
@@ -315,7 +415,10 @@ fn flat_memory_ring_stays_bounded_under_10x_capacity_push() {
         let wm = store.advance_watermark(t(time_ms));
         store.gc(wm, store.limits().max_lookback);
         let len = store.ring(sc).expect("ring exists").len();
-        assert!(len <= capacity, "ring len {len} exceeded capacity {capacity} at step {i}");
+        assert!(
+            len <= capacity,
+            "ring len {len} exceeded capacity {capacity} at step {i}"
+        );
     }
 }
 
@@ -332,10 +435,16 @@ fn store_routes_ring_and_waitqueue_spill_diagnostics() {
     let sc = scope();
 
     assert!(store.push_event(evt(1, 100, sc)).is_none());
-    let spill = store.push_event(evt(2, 200, sc)).expect("full ring must spill via store");
+    let spill = store
+        .push_event(evt(2, 200, sc))
+        .expect("full ring must spill via store");
     assert_eq!(spill.code(), "ADGL3005");
     match spill {
-        StoreDiagnostic::RingBufferSpill { scope: s, dropped, capacity } => {
+        StoreDiagnostic::RingBufferSpill {
+            scope: s,
+            dropped,
+            capacity,
+        } => {
             assert_eq!(s, sc);
             assert_eq!(dropped, EventId::new(1));
             assert_eq!(capacity, 1);
@@ -344,10 +453,16 @@ fn store_routes_ring_and_waitqueue_spill_diagnostics() {
     }
 
     assert!(store.suspend(pending("r1", 1, 100, sc)).is_none());
-    let spill = store.suspend(pending("r2", 2, 900, sc)).expect("full queue must spill via store");
+    let spill = store
+        .suspend(pending("r2", 2, 900, sc))
+        .expect("full queue must spill via store");
     assert_eq!(spill.code(), "ADGL3004");
     match spill {
-        StoreDiagnostic::WaitQueueSpill { scope: s, dropped, capacity } => {
+        StoreDiagnostic::WaitQueueSpill {
+            scope: s,
+            dropped,
+            capacity,
+        } => {
             assert_eq!(s, sc);
             assert_eq!(dropped.upper_bound, t(900), "least urgent dropped");
             assert_eq!(capacity, 1);
@@ -378,13 +493,22 @@ fn provenance_dedup_rejects_second_insert_in_same_window() {
     let dedup = d(1_000); // spec default dedup_window = 1s (ADR-011)
 
     let first = prov("pmtud_hypothesis", 100, dedup);
-    assert!(sg.try_insert_provenance(first.clone()), "first insert accepted");
+    assert!(
+        sg.try_insert_provenance(first.clone()),
+        "first insert accepted"
+    );
     assert!(sg.has_provenance(&first));
     // Same rule/cause/target, different event time but SAME window (100 and
     // 900 both floor to window 0) → rejected.
-    assert!(!sg.try_insert_provenance(prov("pmtud_hypothesis", 900, dedup)), "same-window dup");
+    assert!(
+        !sg.try_insert_provenance(prov("pmtud_hypothesis", 900, dedup)),
+        "same-window dup"
+    );
     // Next dedup window (1100 → window 1) → accepted again.
-    assert!(sg.try_insert_provenance(prov("pmtud_hypothesis", 1_100, dedup)), "new window");
+    assert!(
+        sg.try_insert_provenance(prov("pmtud_hypothesis", 1_100, dedup)),
+        "new window"
+    );
     // Different rule in the same window → distinct key, accepted.
     assert!(sg.try_insert_provenance(prov("other_rule", 100, dedup)));
 }
@@ -409,7 +533,10 @@ fn emitted_problems_cooldown_key_dedup() {
     let target = scope();
     let cooldown = d(5_000);
 
-    assert!(sg.try_mark_emitted(&rule, &problem, target, t(1_000), cooldown), "first emit");
+    assert!(
+        sg.try_mark_emitted(&rule, &problem, target, t(1_000), cooldown),
+        "first emit"
+    );
     assert!(
         !sg.try_mark_emitted(&rule, &problem, target, t(3_000), cooldown),
         "within cooldown: no-op"
@@ -442,7 +569,10 @@ fn emitted_problems_do_not_grow_unbounded() {
     let other = RuleId::new("one_shot_rule");
     assert!(sg.try_mark_emitted(&other, &problem, scope(), t(0), cooldown));
     let pruned = sg.prune_emitted(t(1_000_000), cooldown);
-    assert_eq!(pruned, 2, "both remaining stale tuples pruned past the horizon");
+    assert_eq!(
+        pruned, 2,
+        "both remaining stale tuples pruned past the horizon"
+    );
     // Cooldown still works after pruning: fresh emit, then suppressed.
     assert!(sg.try_mark_emitted(&rule, &problem, scope(), t(1_000_000), cooldown));
     assert!(!sg.try_mark_emitted(&rule, &problem, scope(), t(1_000_500), cooldown));
@@ -486,7 +616,10 @@ fn store_gc_prunes_provenance_alongside_rings() {
     let _evicted = store.gc(wm, store.limits().max_lookback);
     let part = store.partition(sc).expect("partition exists");
     assert!(!part.has_provenance(&prov("r", 0, d(1_000))));
-    assert!(!part.has_provenance(&prov("r", 200_000, d(1_000))), "window 200 < horizon 240");
+    assert!(
+        !part.has_provenance(&prov("r", 200_000, d(1_000))),
+        "window 200 < horizon 240"
+    );
 }
 
 #[test]

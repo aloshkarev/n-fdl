@@ -70,6 +70,15 @@ NodeKind =
 вместо удаления, C7). `CauseKind`/`ProblemKind`/`ActionKind`/`EventType` —
 catalog-типы (§6, [10](10-catalog-abi.md)).
 
+Runtime carriage keeps scalar `Int` fields in the existing sorted
+`(FieldIdx, i64)` array. `IntList` fields use a separate immutable sidecar,
+sorted by `FieldIdx`; each value list is sorted, deduplicated, and
+deterministically truncated to 64 entries. Scalar predicate opcodes never load
+the sidecar. Until list-aware predicate IR exists, the verifier rejects every
+predicate use of `IntList` fields with diagnostic `ADGL0213`; evidence
+serialization still includes list values, subject to the same catalog PII
+redaction as scalar fields.
+
 ## 4. Типы рёбер
 
 ```

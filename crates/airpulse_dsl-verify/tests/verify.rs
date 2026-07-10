@@ -1,14 +1,16 @@
 use airpulse_dsl_evaluator::{Engine, OfflineAuditSink, RunMode, StaticTopology};
 use airpulse_dsl_ir::{
-    AnchorSource, AnchorSpec, BindingIdx, Intent, PredOp, Predicate, ProgramImage, ProvKey, RuleInstance, RuleKind,
-    SlotIdx, Symbol, VerifiedAnnotations, WindowProof,
+    AnchorSource, AnchorSpec, BindingIdx, Intent, PredOp, Predicate, ProgramImage, ProvKey,
+    RuleInstance, RuleKind, SlotIdx, Symbol, VerifiedAnnotations, WindowProof,
 };
 use airpulse_dsl_store::{EventNode, EventProvenance, Limits};
 use airpulse_dsl_types::{
-    ActionKind, CauseKind, EventId, EventTime, EventType, MetricPath, ProblemKind, RuleId, SarifId, ScopeId,
-    ScopeType, Severity, Weight,
+    ActionKind, CauseKind, EventId, EventTime, EventType, MetricPath, ProblemKind, RuleId, SarifId,
+    ScopeId, ScopeType, Severity, Weight,
 };
-use airpulse_dsl_verify::{render_diagnostics, verify_source, verify_source_with_config, VerifyConfig};
+use airpulse_dsl_verify::{
+    VerifyConfig, render_diagnostics, verify_source, verify_source_with_config,
+};
 
 fn t(ms: i64) -> EventTime {
     EventTime::from_millis(ms)
@@ -18,7 +20,13 @@ fn session_scope() -> ScopeId {
     ScopeId::session((0x0a00_0001, 443), (0x0a00_0002, 51234))
 }
 
-fn evt(id: u64, event_type: &str, time_ms: i64, scope: ScopeId, fields: Vec<(airpulse_dsl_ir::FieldIdx, i64)>) -> EventNode {
+fn evt(
+    id: u64,
+    event_type: &str,
+    time_ms: i64,
+    scope: ScopeId,
+    fields: Vec<(airpulse_dsl_ir::FieldIdx, i64)>,
+) -> EventNode {
     EventNode::new(
         EventId::new(id),
         EventType::new(event_type),
@@ -81,8 +89,15 @@ fn stub_device_unreachable_rules() -> Vec<RuleInstance> {
                         field: airpulse_dsl_evaluator::schema::CAUSE_FIELD_CONFIDENCE,
                         dst: slot(0),
                     },
-                    PredOp::LoadConst { imm: 80, dst: slot(1) },
-                    PredOp::CmpGe { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                    PredOp::LoadConst {
+                        imm: 80,
+                        dst: slot(1),
+                    },
+                    PredOp::CmpGe {
+                        lhs: slot(0),
+                        rhs: slot(1),
+                        dst: slot(2),
+                    },
                 ]),
                 result: slot(2),
             },
@@ -177,7 +192,13 @@ fn end_to_end_example_01_emits_problem() {
         RunMode::Offline,
     );
     let s = session_scope();
-    eng.ingest(evt(1, "tcp.retransmission_burst", 10_000, s, vec![(airpulse_dsl_ir::FieldIdx(0), 1500)]));
+    eng.ingest(evt(
+        1,
+        "tcp.retransmission_burst",
+        10_000,
+        s,
+        vec![(airpulse_dsl_ir::FieldIdx(0), 1500)],
+    ));
     eng.ingest(evt(2, "icmp.ptb", 10_400, s, vec![]));
     eng.finish();
     let snap = eng.snapshot();
@@ -186,7 +207,11 @@ fn end_to_end_example_01_emits_problem() {
             .iter()
             .any(|c| c.kind.as_str() == "PmtudBlackhole" && c.confidence.value() == 85)
     );
-    assert!(snap.problems.iter().any(|p| p.kind.as_str() == "XlIcmpTcpMss"));
+    assert!(
+        snap.problems
+            .iter()
+            .any(|p| p.kind.as_str() == "XlIcmpTcpMss")
+    );
 }
 
 #[test]
@@ -226,7 +251,13 @@ ruleset "verify-confidence-threshold" {
         Limits::default(),
         RunMode::Offline,
     );
-    low.ingest(evt(1, "tcp.retransmission_burst", 1_250_000, s, vec![(airpulse_dsl_ir::FieldIdx(0), 1500)]));
+    low.ingest(evt(
+        1,
+        "tcp.retransmission_burst",
+        1_250_000,
+        s,
+        vec![(airpulse_dsl_ir::FieldIdx(0), 1500)],
+    ));
     low.finish();
     let low_snap = low.snapshot();
     assert_eq!(low_snap.causes.len(), 1);
@@ -249,7 +280,10 @@ ruleset "verify-confidence-threshold" {
     assert_eq!(high_snap.causes.len(), 1);
     assert_eq!(high_snap.causes[0].confidence.value(), 85);
     assert!(
-        high_snap.problems.iter().any(|p| p.kind.as_str() == "XlIcmpTcpMss"),
+        high_snap
+            .problems
+            .iter()
+            .any(|p| p.kind.as_str() == "XlIcmpTcpMss"),
         "confidence 85 must trigger the thresholded decision"
     );
 }
@@ -548,7 +582,10 @@ fn example_07_matches_fixture_shape() {
         }
     ));
     if let Intent::EmitAction { reason, .. } = &then[1] {
-        assert_eq!(reason.as_deref(), Some("Masked by upstream topology failure"));
+        assert_eq!(
+            reason.as_deref(),
+            Some("Masked by upstream topology failure")
+        );
     }
 }
 
@@ -595,8 +632,16 @@ fn end_to_end_example_07_suppresses_downstream() {
     ));
     eng.finish();
     let snap = eng.snapshot();
-    assert!(snap.problems.iter().any(|p| p.target == downstream && p.superseded));
-    assert!(snap.audit.iter().any(|a| a.intent.kind == ActionKind::SuppressSymptom));
+    assert!(
+        snap.problems
+            .iter()
+            .any(|p| p.target == downstream && p.superseded)
+    );
+    assert!(
+        snap.audit
+            .iter()
+            .any(|a| a.intent.kind == ActionKind::SuppressSymptom)
+    );
 }
 
 #[test]
@@ -613,3 +658,23 @@ fn dedup_window_config_validation_emits_adgl0503() {
     assert!(err.iter().any(|d| d.code == "ADGL0503"));
 }
 
+#[test]
+fn int_list_fields_reject_predicate_use_with_adgl0213() {
+    let src = r#"
+ruleset "test.int_list_predicates" {
+  version = "1.0"
+  requires = ["wifi-ota"]
+  evidence bad {
+    scope: AccessPoint
+    anchor storm: event(wifi.deauth_burst) { storm.client_macs > 0 }
+    infer Cause(RfInterference) { target: storm.target, weight: +1, evidence: [storm] }
+  }
+}
+"#;
+    let err = verify_source(src).expect_err("IntList predicate must fail verification");
+    assert!(
+        err.iter().any(|d| d.code == "ADGL0213"),
+        "expected ADGL0213, got {:?}",
+        err
+    );
+}

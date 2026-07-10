@@ -6,23 +6,24 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use airpulse_dsl_catalog::{
-    ActionArgKind, ActionTargetType, EventOrBindingType, FieldType, capability_for, catalog_ref, check_kinds,
-    observation_kinds, resolve_action, resolve_cause, resolve_event, resolve_metric_path, resolve_problem,
-    resolve_topo_fn,
+    ActionArgKind, ActionTargetType, EventOrBindingType, FieldType, capability_for, catalog_ref,
+    check_kinds, observation_kinds, resolve_action, resolve_cause, resolve_event,
+    resolve_metric_path, resolve_problem, resolve_topo_fn,
 };
 use airpulse_dsl_ir::{
-    AnchorSource, AnchorSpec, BranchTable, CorrelateSource, CorrelateSpec, ExclusivityGroup, Intent, PredOp,
-    Predicate, ProgramImage, ProvKey, RuleInstance, RuleKind, Symbol, TopoCall, VerifiedAnnotations, WindowProof,
+    AnchorSource, AnchorSpec, BranchTable, CorrelateSource, CorrelateSpec, ExclusivityGroup,
+    Intent, PredOp, Predicate, ProgramImage, ProvKey, RuleInstance, RuleKind, Symbol, TopoCall,
+    VerifiedAnnotations, WindowProof,
 };
 use airpulse_dsl_syntax::ast::{
-    ActionField, ActionName, ActionStmt, BinaryOp, CorrelateBlock, CorrelateSource as AstCorrelateSource,
-    DecisionAnchor, Decl, EmitField, EmitStmt, Expr, ExprKind, InferField, InferStmt, KindIdent,
-    RuleDecl, Ruleset, Stmt, UnaryOp,
+    ActionField, ActionName, ActionStmt, BinaryOp, CorrelateBlock,
+    CorrelateSource as AstCorrelateSource, DecisionAnchor, Decl, EmitField, EmitStmt, Expr,
+    ExprKind, InferField, InferStmt, KindIdent, RuleDecl, Ruleset, Stmt, UnaryOp,
 };
 use airpulse_dsl_syntax::parse_ruleset;
 use airpulse_dsl_types::{
-    ActionKind, Capability, CauseKind, DurationMs, EventType, MetricPath, ProblemKind, RuleId, ScopeType, Severity,
-    Weight, stable_hash_u64, stable_string_i64,
+    ActionKind, Capability, CauseKind, DurationMs, EventType, MetricPath, ProblemKind, RuleId,
+    ScopeType, Severity, Weight, stable_hash_u64, stable_string_i64,
 };
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
@@ -55,7 +56,10 @@ pub struct VerifyConfig {
 
 impl Default for VerifyConfig {
     fn default() -> Self {
-        Self { max_lookback_ms: DEFAULT_MAX_LOOKBACK_MS, dedup_window_ms: DEFAULT_DEDUP_WINDOW_MS }
+        Self {
+            max_lookback_ms: DEFAULT_MAX_LOOKBACK_MS,
+            dedup_window_ms: DEFAULT_DEDUP_WINDOW_MS,
+        }
     }
 }
 
@@ -65,7 +69,10 @@ pub fn verify(ruleset: &Ruleset<'_>) -> Result<VerifiedProgram, DiagBuffer> {
 }
 
 /// Verifies already parsed ruleset and lowers it to IR with explicit limits config.
-pub fn verify_with_config(ruleset: &Ruleset<'_>, config: VerifyConfig) -> Result<VerifiedProgram, DiagBuffer> {
+pub fn verify_with_config(
+    ruleset: &Ruleset<'_>,
+    config: VerifyConfig,
+) -> Result<VerifiedProgram, DiagBuffer> {
     let mut diags = DiagBuffer::new();
     let mut state = VerifyState::new();
 
@@ -108,7 +115,10 @@ pub fn verify_source(src: &str) -> Result<VerifiedProgram, DiagBuffer> {
 }
 
 /// Parses, verifies and lowers ADGL source with explicit limits config.
-pub fn verify_source_with_config(src: &str, config: VerifyConfig) -> Result<VerifiedProgram, DiagBuffer> {
+pub fn verify_source_with_config(
+    src: &str,
+    config: VerifyConfig,
+) -> Result<VerifiedProgram, DiagBuffer> {
     let ast = parse_ruleset(src)?;
     verify_with_config(&ast, config)
 }
@@ -133,10 +143,16 @@ pub fn render_diagnostics(src: &str, file: &str, diags: &DiagBuffer) -> String {
                     .with_message(d.message.clone()),
             )
             .finish();
-        if report.write((file, Source::from(src)), &mut rendered).is_ok() {
+        if report
+            .write((file, Source::from(src)), &mut rendered)
+            .is_ok()
+        {
             out.push_str(&String::from_utf8_lossy(&rendered));
         } else {
-            out.push_str(&format!("{file}:{}: {} {}\n", d.span.start, d.code, d.message));
+            out.push_str(&format!(
+                "{file}:{}: {} {}\n",
+                d.span.start, d.code, d.message
+            ));
         }
     }
     out
@@ -174,7 +190,10 @@ impl RuleEnv {
         match rule {
             RuleDecl::Evidence(e) => {
                 let event_ty = EventType::new(kind_ident_name(&e.anchor.event_type));
-                bindings.insert(e.anchor.binding.name.to_string(), BindingTy::Event(event_ty));
+                bindings.insert(
+                    e.anchor.binding.name.to_string(),
+                    BindingTy::Event(event_ty),
+                );
                 binding_idx.insert(e.anchor.binding.name.to_string(), 0);
                 for (i, c) in e.correlates.iter().enumerate() {
                     if let Some(b) = correlate_binding_ty(c) {
@@ -182,12 +201,19 @@ impl RuleEnv {
                         binding_idx.insert(c.binding.name.to_string(), (i + 1) as u8);
                     }
                 }
-                Self { rule_scope: e.scope, bindings, binding_idx }
+                Self {
+                    rule_scope: e.scope,
+                    bindings,
+                    binding_idx,
+                }
             }
             RuleDecl::Decision(d) => {
                 match &d.anchor {
                     DecisionAnchor::Cause(c) => {
-                        bindings.insert(c.binding.name.to_string(), BindingTy::Cause(CauseKind::new(c.cause.name)));
+                        bindings.insert(
+                            c.binding.name.to_string(),
+                            BindingTy::Cause(CauseKind::new(c.cause.name)),
+                        );
                         binding_idx.insert(c.binding.name.to_string(), 0);
                     }
                     DecisionAnchor::Problem(p) => {
@@ -204,7 +230,11 @@ impl RuleEnv {
                         binding_idx.insert(c.binding.name.to_string(), (i + 1) as u8);
                     }
                 }
-                Self { rule_scope: d.scope, bindings, binding_idx }
+                Self {
+                    rule_scope: d.scope,
+                    bindings,
+                    binding_idx,
+                }
             }
         }
     }
@@ -216,7 +246,12 @@ fn phase01_catalog_resolution(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
         match rule {
             RuleDecl::Evidence(e) => {
                 if resolve_event(&kind_ident_name(&e.anchor.event_type)).is_none() {
-                    err(diags, "ADGL0201", "unknown event type", e.anchor.event_type.span);
+                    err(
+                        diags,
+                        "ADGL0201",
+                        "unknown event type",
+                        e.anchor.event_type.span,
+                    );
                 }
                 for c in &e.correlates {
                     match &c.source {
@@ -330,7 +365,12 @@ fn validate_stmt_catalog(rule: &RuleDecl<'_>, stmts: &[Stmt<'_>], diags: &mut Di
                 match action_schema.arg_kind {
                     ActionArgKind::ObservationKind => {
                         let Some(arg) = &a.arg else {
-                            err(diags, "ADGL0207", "missing observation kind argument", a.span);
+                            err(
+                                diags,
+                                "ADGL0207",
+                                "missing observation kind argument",
+                                a.span,
+                            );
                             continue;
                         };
                         let arg_name = kind_ident_name(arg);
@@ -350,11 +390,21 @@ fn validate_stmt_catalog(rule: &RuleDecl<'_>, stmts: &[Stmt<'_>], diags: &mut Di
                     }
                     ActionArgKind::ProblemRefBinding => {
                         let Some(arg) = &a.arg else {
-                            err(diags, "ADGL0209", "missing suppress_symptom binding argument", a.span);
+                            err(
+                                diags,
+                                "ADGL0209",
+                                "missing suppress_symptom binding argument",
+                                a.span,
+                            );
                             continue;
                         };
                         if arg.segments.len() != 1 {
-                            err(diags, "ADGL0209", "suppress_symptom argument must be a ProblemRef binding", arg.span);
+                            err(
+                                diags,
+                                "ADGL0209",
+                                "suppress_symptom argument must be a ProblemRef binding",
+                                arg.span,
+                            );
                             continue;
                         }
                         let id = arg.segments[0].name.to_string();
@@ -382,7 +432,11 @@ fn validate_stmt_catalog(rule: &RuleDecl<'_>, stmts: &[Stmt<'_>], diags: &mut Di
 }
 
 // ===== Phase 2: Name Resolution + Type Check =====
-fn phase02_name_and_typecheck(ruleset: &Ruleset<'_>, state: &mut VerifyState, diags: &mut DiagBuffer) {
+fn phase02_name_and_typecheck(
+    ruleset: &Ruleset<'_>,
+    state: &mut VerifyState,
+    diags: &mut DiagBuffer,
+) {
     for rule in &ruleset.rules {
         let env = RuleEnv::for_rule(rule);
         let mut exprs = Vec::new();
@@ -443,14 +497,24 @@ fn phase02_name_and_typecheck(ruleset: &Ruleset<'_>, state: &mut VerifyState, di
         for stmt in stmts {
             match stmt {
                 Stmt::Infer(infer) => {
-                    let has_target = infer.fields.iter().any(|field| matches!(field, InferField::Target(_, _)));
+                    let has_target = infer
+                        .fields
+                        .iter()
+                        .any(|field| matches!(field, InferField::Target(_, _)));
                     if !has_target {
                         // 04-type-system.md §7 (T-Infer) requires an explicit target expression.
-                        err(diags, "ADGL0210", "infer requires an explicit target field", infer.span);
+                        err(
+                            diags,
+                            "ADGL0210",
+                            "infer requires an explicit target field",
+                            infer.span,
+                        );
                     }
                     for field in &infer.fields {
                         if let Some((weight, span)) = field.weight_value()
-                            && (weight < i64::from(i8::MIN) || weight > i64::from(i8::MAX) || !(-100..=100).contains(&weight))
+                            && (weight < i64::from(i8::MIN)
+                                || weight > i64::from(i8::MAX)
+                                || !(-100..=100).contains(&weight))
                         {
                             err(diags, "ADGL0205", "weight must be within [-100, 100]", span);
                         }
@@ -523,24 +587,46 @@ fn phase05_scope_target(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
         for stmt in stmts {
             match stmt {
                 Stmt::Infer(infer) => {
-                    let target_scope = infer_target_scope_from_infer(infer, &env).unwrap_or(rule_scope);
+                    let target_scope =
+                        infer_target_scope_from_infer(infer, &env).unwrap_or(rule_scope);
                     if !rule_scope.is_subsumed_by(target_scope) {
-                        err(diags, "ADGL0210", "target scope not compatible with rule scope", infer.span);
+                        err(
+                            diags,
+                            "ADGL0210",
+                            "target scope not compatible with rule scope",
+                            infer.span,
+                        );
                     }
                     if let Some(schema) = resolve_cause(infer.cause.name) {
-                        if !schema.valid_scopes.iter().any(|s| *s == target_scope) {
-                            err(diags, "ADGL0211", "cause is invalid for target scope", infer.span);
+                        if !schema.valid_scopes.contains(&target_scope) {
+                            err(
+                                diags,
+                                "ADGL0211",
+                                "cause is invalid for target scope",
+                                infer.span,
+                            );
                         }
                     }
                 }
                 Stmt::Emit(emit) => {
-                    let target_scope = infer_target_scope_from_emit(emit, &env).unwrap_or(rule_scope);
+                    let target_scope =
+                        infer_target_scope_from_emit(emit, &env).unwrap_or(rule_scope);
                     if !rule_scope.is_subsumed_by(target_scope) {
-                        err(diags, "ADGL0210", "target scope not compatible with rule scope", emit.span);
+                        err(
+                            diags,
+                            "ADGL0210",
+                            "target scope not compatible with rule scope",
+                            emit.span,
+                        );
                     }
                     if let Some(schema) = resolve_problem(emit.problem.name) {
-                        if !schema.valid_scopes.iter().any(|s| *s == target_scope) {
-                            err(diags, "ADGL0212", "problem is invalid for target scope", emit.span);
+                        if !schema.valid_scopes.contains(&target_scope) {
+                            err(
+                                diags,
+                                "ADGL0212",
+                                "problem is invalid for target scope",
+                                emit.span,
+                            );
                         }
                     }
                 }
@@ -571,15 +657,30 @@ fn phase06_temporal(ruleset: &Ruleset<'_>, config: VerifyConfig, diags: &mut Dia
         };
         for c in correlates {
             if !is_binding_time_probe(&c.time.probe, c.binding.name) {
-                err(diags, "ADGL0413", "malformed window probe, expected <binding>.time", c.time.span);
+                err(
+                    diags,
+                    "ADGL0413",
+                    "malformed window probe, expected <binding>.time",
+                    c.time.span,
+                );
             }
             match calculable_window(anchor_binding, &c.time.start, &c.time.end) {
                 Some((back, forward)) => {
                     if back > allowed_window_ms || forward > allowed_window_ms {
-                        err(diags, "ADGL0412", "window exceeds MAX_LOOKBACK", c.time.span);
+                        err(
+                            diags,
+                            "ADGL0412",
+                            "window exceeds MAX_LOOKBACK",
+                            c.time.span,
+                        );
                     }
                 }
-                None => err(diags, "ADGL0411", "non calculable window expression", c.time.span),
+                None => err(
+                    diags,
+                    "ADGL0411",
+                    "non calculable window expression",
+                    c.time.span,
+                ),
             }
         }
     }
@@ -595,21 +696,44 @@ fn phase07_topology_signatures(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
         };
         for c in correlates {
             let Some(topo_fn) = resolve_topo_fn(c.topo.name.name) else {
-                err(diags, "ADGL0420", "unknown topology function", c.topo.name.span);
+                err(
+                    diags,
+                    "ADGL0420",
+                    "unknown topology function",
+                    c.topo.name.span,
+                );
                 continue;
             };
             if topo_fn.arity != c.topo.args.len() {
-                err(diags, "ADGL0421", "topology function arity mismatch", c.topo.span);
+                err(
+                    diags,
+                    "ADGL0421",
+                    "topology function arity mismatch",
+                    c.topo.span,
+                );
             }
             let mut arg_scopes = Vec::new();
             for arg in &c.topo.args {
                 match infer_target_scope_expr(arg, &env) {
                     Some(scope) => arg_scopes.push(scope),
-                    None => err(diags, "ADGL0421", "topology args must be scope-id paths", arg.span),
+                    None => err(
+                        diags,
+                        "ADGL0421",
+                        "topology args must be scope-id paths",
+                        arg.span,
+                    ),
                 }
             }
-            if c.topo.name.name == "upstream_of" && arg_scopes.len() == 2 && arg_scopes[0] != arg_scopes[1] {
-                err(diags, "ADGL0421", "upstream_of requires same scope type for both args", c.topo.span);
+            if c.topo.name.name == "upstream_of"
+                && arg_scopes.len() == 2
+                && arg_scopes[0] != arg_scopes[1]
+            {
+                err(
+                    diags,
+                    "ADGL0421",
+                    "upstream_of requires same scope type for both args",
+                    c.topo.span,
+                );
             }
         }
     }
@@ -622,10 +746,14 @@ fn phase08_acyclicity(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
     for (idx, rule) in ruleset.rules.iter().enumerate() {
         if let RuleDecl::Decision(d) = rule {
             match &d.anchor {
-                DecisionAnchor::Cause(c) => cause_anchor_rules.entry(c.cause.name.to_string()).or_default().push(idx),
-                DecisionAnchor::Problem(p) => {
-                    problem_anchor_rules.entry(p.problem.name.to_string()).or_default().push(idx)
-                }
+                DecisionAnchor::Cause(c) => cause_anchor_rules
+                    .entry(c.cause.name.to_string())
+                    .or_default()
+                    .push(idx),
+                DecisionAnchor::Problem(p) => problem_anchor_rules
+                    .entry(p.problem.name.to_string())
+                    .or_default()
+                    .push(idx),
             }
         }
     }
@@ -654,7 +782,12 @@ fn phase08_acyclicity(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
         }
     }
     if has_cycle(&edges) {
-        err(diags, "ADGL0410", "cyclic rule dependency detected", ruleset.span);
+        err(
+            diags,
+            "ADGL0410",
+            "cyclic rule dependency detected",
+            ruleset.span,
+        );
     }
 }
 
@@ -674,7 +807,12 @@ fn phase09_exclusivity(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
             let mut scopes_by_cause = HashMap::new();
             for id in &group.idents {
                 let Some(schema) = resolve_cause(id.name) else {
-                    err(diags, "ADGL0202", "unknown cause in exclusivity group", id.span);
+                    err(
+                        diags,
+                        "ADGL0202",
+                        "unknown cause in exclusivity group",
+                        id.span,
+                    );
                     continue;
                 };
                 scopes_by_cause.insert(id.name.to_string(), schema.valid_scopes.to_vec());
@@ -683,11 +821,21 @@ fn phase09_exclusivity(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
                 for j in (i + 1)..group.idents.len() {
                     let a = group.idents[i].name.to_string();
                     let b = group.idents[j].name.to_string();
-                    let pair = if a <= b { (a.clone(), b.clone()) } else { (b.clone(), a.clone()) };
+                    let pair = if a <= b {
+                        (a.clone(), b.clone())
+                    } else {
+                        (b.clone(), a.clone())
+                    };
                     if !seen_pairs.insert(pair) {
-                        err(diags, "ADGL0440", "overlapping exclusivity pair", group.span);
+                        err(
+                            diags,
+                            "ADGL0440",
+                            "overlapping exclusivity pair",
+                            group.span,
+                        );
                     }
-                    if let (Some(sa), Some(sb)) = (scopes_by_cause.get(&a), scopes_by_cause.get(&b)) {
+                    if let (Some(sa), Some(sb)) = (scopes_by_cause.get(&a), scopes_by_cause.get(&b))
+                    {
                         let overlap = sa.iter().any(|s| sb.iter().any(|x| x == s));
                         if !overlap {
                             warn(
@@ -719,7 +867,12 @@ fn phase10_bipartite(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
                 }
                 for stmt in stmts {
                     if matches!(stmt, Stmt::Emit(_)) {
-                        err(diags, "ADGL0450", "evidence rule cannot emit Problem", e.span);
+                        err(
+                            diags,
+                            "ADGL0450",
+                            "evidence rule cannot emit Problem",
+                            e.span,
+                        );
                     }
                 }
             }
@@ -734,7 +887,12 @@ fn phase10_bipartite(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
                 }
                 for stmt in stmts {
                     if matches!(stmt, Stmt::Infer(_)) {
-                        err(diags, "ADGL0450", "decision rule cannot infer Cause", d.span);
+                        err(
+                            diags,
+                            "ADGL0450",
+                            "decision rule cannot infer Cause",
+                            d.span,
+                        );
                     }
                 }
             }
@@ -747,7 +905,12 @@ fn phase11_dos_limits(ruleset: &Ruleset<'_>, config: VerifyConfig, diags: &mut D
     // ADGL0503 is config-derived (ADR-011 dedup_window), not source-derived:
     // we validate it when explicit verify config is provided.
     if config.dedup_window_ms < 1 {
-        err(diags, "ADGL0503", "dedup window must be at least 1ms", ruleset.span);
+        err(
+            diags,
+            "ADGL0503",
+            "dedup window must be at least 1ms",
+            ruleset.span,
+        );
     }
     let mut requires_count = 0usize;
     for decl in &ruleset.header.decls {
@@ -774,7 +937,12 @@ fn phase11_dos_limits(ruleset: &Ruleset<'_>, config: VerifyConfig, diags: &mut D
             }
         }
         if stmt_count > MAX_INTENTS_PER_RULE {
-            err(diags, "ADGL0205", "too many infer/emit/action intents", span);
+            err(
+                diags,
+                "ADGL0205",
+                "too many infer/emit/action intents",
+                span,
+            );
         }
         if max_expr_depth_rule(rule) > MAX_NESTING {
             err(diags, "ADGL0103", "nesting exceeds supported maximum", span);
@@ -791,7 +959,9 @@ fn phase12_privacy_annotations(ruleset: &Ruleset<'_>, state: &mut VerifyState) {
             if let BindingTy::Event(event) = ty {
                 if let Some(schema) = resolve_event(event.as_str()) {
                     for field in schema.fields.iter().filter(|f| f.pii) {
-                        state.pii_by_binding_path.insert(format!("{binding}.{}", field.name));
+                        state
+                            .pii_by_binding_path
+                            .insert(format!("{binding}.{}", field.name));
                     }
                 }
             }
@@ -800,7 +970,11 @@ fn phase12_privacy_annotations(ruleset: &Ruleset<'_>, state: &mut VerifyState) {
 }
 
 // ===== Lowering: Typed AST -> ProgramImage =====
-fn lower_to_image(ruleset: &Ruleset<'_>, state: &mut VerifyState, diags: &mut DiagBuffer) -> ProgramImage {
+fn lower_to_image(
+    ruleset: &Ruleset<'_>,
+    state: &mut VerifyState,
+    diags: &mut DiagBuffer,
+) -> ProgramImage {
     let mut rules = Vec::new();
     for rule in &ruleset.rules {
         let env = RuleEnv::for_rule(rule);
@@ -813,7 +987,11 @@ fn lower_to_image(ruleset: &Ruleset<'_>, state: &mut VerifyState, diags: &mut Di
     for decl in &ruleset.header.decls {
         match decl {
             Decl::Requires(r) => {
-                requires.extend(r.capabilities.iter().map(|s| Capability::new(s.value.clone())));
+                requires.extend(
+                    r.capabilities
+                        .iter()
+                        .map(|s| Capability::new(s.value.clone())),
+                );
             }
             Decl::MutuallyExclusive(group) => {
                 exclusivity.push(ExclusivityGroup {
@@ -838,57 +1016,72 @@ fn lower_to_image(ruleset: &Ruleset<'_>, state: &mut VerifyState, diags: &mut Di
     )
 }
 
-fn lower_rule(rule: &RuleDecl<'_>, env: &RuleEnv, state: &VerifyState, diags: &mut DiagBuffer) -> Option<RuleInstance> {
-    let (id, kind, scope, anchor_binding_name, anchor_spec, correlates_ast, if_else, body, _span) = match rule {
-        RuleDecl::Evidence(e) => {
-            let anchor_source = AnchorSource::Event(EventType::new(kind_ident_name(&e.anchor.event_type)));
-            let pred = e
-                .anchor
-                .predicate
-                .as_ref()
-                .map(|p| compile_predicate(p, env, diags))
-                .unwrap_or_else(Predicate::always_true);
-            (
-                RuleId::new(e.name.name.to_string()),
-                RuleKind::Evidence,
-                e.scope,
-                e.anchor.binding.name.to_string(),
-                AnchorSpec { binding: Symbol::new(e.anchor.binding.name.to_string()), source: anchor_source, predicate: pred },
-                &e.correlates,
-                &e.if_else,
-                &e.body,
-                e.span,
-            )
-        }
-        RuleDecl::Decision(d) => {
-            let (binding, source, pred) = match &d.anchor {
-                DecisionAnchor::Cause(c) => (
-                    c.binding.name.to_string(),
-                    AnchorSource::Cause(CauseKind::new(c.cause.name.to_string())),
-                    compile_predicate(&c.predicate, env, diags),
-                ),
-                DecisionAnchor::Problem(p) => (
-                    p.binding.name.to_string(),
-                    AnchorSource::Problem(ProblemKind::new(p.problem.name.to_string())),
-                    p.predicate
-                        .as_ref()
-                        .map(|p| compile_predicate(p, env, diags))
-                        .unwrap_or_else(Predicate::always_true),
-                ),
-            };
-            (
-                RuleId::new(d.name.name.to_string()),
-                RuleKind::Decision,
-                d.scope,
-                binding.clone(),
-                AnchorSpec { binding: Symbol::new(binding), source, predicate: pred },
-                &d.correlates,
-                &d.if_else,
-                &d.body,
-                d.span,
-            )
-        }
-    };
+fn lower_rule(
+    rule: &RuleDecl<'_>,
+    env: &RuleEnv,
+    state: &VerifyState,
+    diags: &mut DiagBuffer,
+) -> Option<RuleInstance> {
+    let (id, kind, scope, anchor_binding_name, anchor_spec, correlates_ast, if_else, body, _span) =
+        match rule {
+            RuleDecl::Evidence(e) => {
+                let anchor_source =
+                    AnchorSource::Event(EventType::new(kind_ident_name(&e.anchor.event_type)));
+                let pred = e
+                    .anchor
+                    .predicate
+                    .as_ref()
+                    .map(|p| compile_predicate(p, env, diags))
+                    .unwrap_or_else(Predicate::always_true);
+                (
+                    RuleId::new(e.name.name.to_string()),
+                    RuleKind::Evidence,
+                    e.scope,
+                    e.anchor.binding.name.to_string(),
+                    AnchorSpec {
+                        binding: Symbol::new(e.anchor.binding.name.to_string()),
+                        source: anchor_source,
+                        predicate: pred,
+                    },
+                    &e.correlates,
+                    &e.if_else,
+                    &e.body,
+                    e.span,
+                )
+            }
+            RuleDecl::Decision(d) => {
+                let (binding, source, pred) = match &d.anchor {
+                    DecisionAnchor::Cause(c) => (
+                        c.binding.name.to_string(),
+                        AnchorSource::Cause(CauseKind::new(c.cause.name.to_string())),
+                        compile_predicate(&c.predicate, env, diags),
+                    ),
+                    DecisionAnchor::Problem(p) => (
+                        p.binding.name.to_string(),
+                        AnchorSource::Problem(ProblemKind::new(p.problem.name.to_string())),
+                        p.predicate
+                            .as_ref()
+                            .map(|p| compile_predicate(p, env, diags))
+                            .unwrap_or_else(Predicate::always_true),
+                    ),
+                };
+                (
+                    RuleId::new(d.name.name.to_string()),
+                    RuleKind::Decision,
+                    d.scope,
+                    binding.clone(),
+                    AnchorSpec {
+                        binding: Symbol::new(binding),
+                        source,
+                        predicate: pred,
+                    },
+                    &d.correlates,
+                    &d.if_else,
+                    &d.body,
+                    d.span,
+                )
+            }
+        };
 
     let correlates = correlates_ast
         .iter()
@@ -951,7 +1144,11 @@ fn lower_rule(rule: &RuleDecl<'_>, env: &RuleEnv, state: &VerifyState, diags: &m
         Some(BranchTable {
             cond,
             then_body: then_body.into_boxed_slice(),
-            else_body: if else_intents.is_empty() { None } else { Some(else_intents.into_boxed_slice()) },
+            else_body: if else_intents.is_empty() {
+                None
+            } else {
+                Some(else_intents.into_boxed_slice())
+            },
             unknown_body: unknown_body.into_boxed_slice(),
         })
     } else {
@@ -966,7 +1163,11 @@ fn lower_rule(rule: &RuleDecl<'_>, env: &RuleEnv, state: &VerifyState, diags: &m
         correlates: correlates.into_boxed_slice(),
         branches,
         body: unconditional.into_boxed_slice(),
-        annotations: VerifiedAnnotations { max_backward, max_forward, target_scope: Some(scope) },
+        annotations: VerifiedAnnotations {
+            max_backward,
+            max_forward,
+            target_scope: Some(scope),
+        },
     })
 }
 
@@ -979,7 +1180,9 @@ fn lower_correlate(
     let source = match &c.source {
         AstCorrelateSource::Event(e) => CorrelateSource::Event(EventType::new(kind_ident_name(e))),
         AstCorrelateSource::Cause(k) => CorrelateSource::Cause(CauseKind::new(k.name.to_string())),
-        AstCorrelateSource::Problem(k) => CorrelateSource::Problem(ProblemKind::new(k.name.to_string())),
+        AstCorrelateSource::Problem(k) => {
+            CorrelateSource::Problem(ProblemKind::new(k.name.to_string()))
+        }
     };
     let topo_fn = resolve_topo_fn(c.topo.name.name)?;
     let mut args = Vec::new();
@@ -987,16 +1190,47 @@ fn lower_correlate(
         if let Some(path) = metric_path_from_expr(arg) {
             args.push(path);
         } else {
-            err(diags, "ADGL0421", "topology arg must be a metric path", arg.span);
+            err(
+                diags,
+                "ADGL0421",
+                "topology arg must be a metric path",
+                arg.span,
+            );
             return None;
         }
     }
-    let window = if let Some((back, forward)) = calculable_window(anchor_binding, &c.time.start, &c.time.end) {
+    let window = if let Some((back, forward)) =
+        calculable_window(anchor_binding, &c.time.start, &c.time.end)
+    {
         let back = DurationMs::from_millis(back).unwrap_or_default();
         let forward = DurationMs::from_millis(forward).unwrap_or_default();
         WindowProof::Calculable { back, forward }
     } else {
         WindowProof::RuntimeCheck
+    };
+    let min_match = match c.min_match {
+        None => 1,
+        Some(clause) if clause.count == 0 => {
+            err(
+                diags,
+                "ADGL0504",
+                "min match count must be at least 1",
+                clause.span,
+            );
+            return None;
+        }
+        Some(clause) if clause.count > 32 => {
+            err(
+                diags,
+                "ADGL0505",
+                "min match count exceeds maximum of 32 per correlate",
+                clause.span,
+            );
+            return None;
+        }
+        Some(clause) => {
+            u8::try_from(clause.count).expect("verified correlate min match is in the range 1..=32")
+        }
     };
     Some(CorrelateSpec {
         binding: Symbol::new(c.binding.name.to_string()),
@@ -1007,6 +1241,7 @@ fn lower_correlate(
             args: args.into_boxed_slice(),
         },
         window,
+        min_match,
     })
 }
 
@@ -1021,7 +1256,9 @@ fn lower_stmt(
     match stmt {
         Stmt::Infer(i) => lower_infer(i, env, rule_id, state, diags).map(|it| vec![it]),
         Stmt::Emit(e) => lower_emit(e, env, state, rule_scope, diags).map(|it| vec![it]),
-        Stmt::Action(a) => lower_action(a, env, diags).map(|v| if v.is_empty() { Vec::new() } else { v }),
+        Stmt::Action(a) => {
+            lower_action(a, env, diags).map(|v| if v.is_empty() { Vec::new() } else { v })
+        }
     }
 }
 
@@ -1032,14 +1269,16 @@ fn lower_infer(
     state: &VerifyState,
     diags: &mut DiagBuffer,
 ) -> Option<Intent> {
-    let Some(target) = infer
-        .fields
-        .iter()
-        .find_map(|f| match f {
-            InferField::Target(expr, _) => metric_path_from_expr(expr),
-            _ => None,
-        }) else {
-        err(diags, "ADGL0210", "infer requires an explicit target field", infer.span);
+    let Some(target) = infer.fields.iter().find_map(|f| match f {
+        InferField::Target(expr, _) => metric_path_from_expr(expr),
+        _ => None,
+    }) else {
+        err(
+            diags,
+            "ADGL0210",
+            "infer requires an explicit target field",
+            infer.span,
+        );
         return None;
     };
     let weight_val = infer
@@ -1052,7 +1291,12 @@ fn lower_infer(
         return None;
     };
     let Some(weight) = Weight::new(weight_i8) else {
-        err(diags, "ADGL0205", "weight out of allowed range [-100,100]", infer.span);
+        err(
+            diags,
+            "ADGL0205",
+            "weight out of allowed range [-100,100]",
+            infer.span,
+        );
         return None;
     };
     let evidence = infer
@@ -1153,7 +1397,11 @@ fn lower_emit(
     })
 }
 
-fn lower_action(action: &ActionStmt<'_>, env: &RuleEnv, diags: &mut DiagBuffer) -> Option<Vec<Intent>> {
+fn lower_action(
+    action: &ActionStmt<'_>,
+    env: &RuleEnv,
+    diags: &mut DiagBuffer,
+) -> Option<Vec<Intent>> {
     let name = action_name(action);
     let known = resolve_action(name)?;
     let reason = action.fields.iter().find_map(|f| match f {
@@ -1175,16 +1423,31 @@ fn lower_action(action: &ActionStmt<'_>, env: &RuleEnv, diags: &mut DiagBuffer) 
         .unwrap_or_else(|| Box::new([]));
     if known.kind == ActionKind::SuppressSymptom {
         let Some(arg) = &action.arg else {
-            err(diags, "ADGL0209", "suppress_symptom requires binding arg", action.span);
+            err(
+                diags,
+                "ADGL0209",
+                "suppress_symptom requires binding arg",
+                action.span,
+            );
             return None;
         };
         if arg.segments.len() != 1 {
-            err(diags, "ADGL0209", "suppress_symptom arg must be one binding", arg.span);
+            err(
+                diags,
+                "ADGL0209",
+                "suppress_symptom arg must be one binding",
+                arg.span,
+            );
             return None;
         }
         let binding = arg.segments[0].name;
         let Some(BindingTy::Problem(problem)) = env.bindings.get(binding) else {
-            err(diags, "ADGL0209", "suppress_symptom arg must be ProblemRef binding", arg.span);
+            err(
+                diags,
+                "ADGL0209",
+                "suppress_symptom arg must be ProblemRef binding",
+                arg.span,
+            );
             return None;
         };
         let target = MetricPath::new(format!("{binding}.target"));
@@ -1223,7 +1486,10 @@ fn compile_predicate(expr: &Expr<'_>, env: &RuleEnv, diags: &mut DiagBuffer) -> 
     let result_slot = airpulse_dsl_ir::SlotIdx::new(result)
         .or_else(|| airpulse_dsl_ir::SlotIdx::new(0))
         .unwrap_or(Predicate::always_true().result);
-    Predicate { ops: ops.into_boxed_slice(), result: result_slot }
+    Predicate {
+        ops: ops.into_boxed_slice(),
+        result: result_slot,
+    }
 }
 
 #[derive(Default)]
@@ -1293,7 +1559,12 @@ fn compile_expr(
                 });
                 return Some(dst);
             }
-            err(diags, "ADGL0501", "bare identifier is not a predicate value", id.span);
+            err(
+                diags,
+                "ADGL0501",
+                "bare identifier is not a predicate value",
+                id.span,
+            );
             None
         }
         ExprKind::Present(id) => {
@@ -1316,32 +1587,42 @@ fn compile_expr(
         }
         ExprKind::Field { base, field } => {
             let ExprKind::Ident(binding) = &base.kind else {
-                err(diags, "ADGL0501", "field access base must be a binding", expr.span);
+                err(
+                    diags,
+                    "ADGL0501",
+                    "field access base must be a binding",
+                    expr.span,
+                );
                 return None;
             };
             let Some(binding_ty) = env.bindings.get(binding.name) else {
                 err(diags, "ADGL0209", "unknown binding", binding.span);
                 return None;
             };
-            let (field_idx, op_kind) = match binding_ty {
+            let (field_idx, field_ty, op_kind) = match binding_ty {
                 BindingTy::Event(event) => resolve_metric_path(
                     EventOrBindingType::Event(event),
                     &format!("{}.{}", binding.name, field.name),
                 )
-                .map(|(idx, _)| (idx, 0)),
+                .map(|(idx, ty)| (idx, ty, 0)),
                 BindingTy::Cause(cause) => resolve_metric_path(
                     EventOrBindingType::Cause(cause),
                     &format!("{}.{}", binding.name, field.name),
                 )
-                .map(|(idx, _)| (idx, 1)),
+                .map(|(idx, ty)| (idx, ty, 1)),
                 BindingTy::Problem(problem) => resolve_metric_path(
                     EventOrBindingType::Problem(problem),
                     &format!("{}.{}", binding.name, field.name),
                 )
-                .map(|(idx, _)| (idx, 2)),
+                .map(|(idx, ty)| (idx, ty, 2)),
             }?;
+            if is_int_list_type(field_ty) {
+                reject_intlist_predicate_use(expr.span, diags);
+                return None;
+            }
             let dst = slots.alloc(diags, expr.span);
-            let binding_idx = airpulse_dsl_ir::BindingIdx(*env.binding_idx.get(binding.name).unwrap_or(&0));
+            let binding_idx =
+                airpulse_dsl_ir::BindingIdx(*env.binding_idx.get(binding.name).unwrap_or(&0));
             let dst_slot = airpulse_dsl_ir::SlotIdx::new(dst)?;
             match op_kind {
                 0 => ops.push(PredOp::LoadEventField {
@@ -1381,37 +1662,105 @@ fn compile_expr(
             let rhs = airpulse_dsl_ir::SlotIdx::new(rhs)?;
             let dst_slot = airpulse_dsl_ir::SlotIdx::new(dst)?;
             match op {
-                BinaryOp::Or => ops.push(PredOp::Or { lhs, rhs, dst: dst_slot }),
-                BinaryOp::And => ops.push(PredOp::And { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Eq => ops.push(PredOp::CmpEq { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Ne => ops.push(PredOp::CmpNe { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Lt => ops.push(PredOp::CmpLt { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Le => ops.push(PredOp::CmpLe { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Gt => ops.push(PredOp::CmpGt { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Ge => ops.push(PredOp::CmpGe { lhs, rhs, dst: dst_slot }),
+                BinaryOp::Or => ops.push(PredOp::Or {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::And => ops.push(PredOp::And {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Eq => ops.push(PredOp::CmpEq {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Ne => ops.push(PredOp::CmpNe {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Lt => ops.push(PredOp::CmpLt {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Le => ops.push(PredOp::CmpLe {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Gt => ops.push(PredOp::CmpGt {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Ge => ops.push(PredOp::CmpGe {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
                 BinaryOp::In => {
-                    ops.push(PredOp::CmpGe { lhs, rhs, dst: dst_slot });
+                    reject_intlist_predicate_use(expr.span, diags);
+                    return None;
                 }
-                BinaryOp::Add => ops.push(PredOp::Add { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Sub => ops.push(PredOp::Sub { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Mul => ops.push(PredOp::Mul { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Div => ops.push(PredOp::Div { lhs, rhs, dst: dst_slot }),
-                BinaryOp::Rem => ops.push(PredOp::Mod { lhs, rhs, dst: dst_slot }),
+                BinaryOp::Add => ops.push(PredOp::Add {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Sub => ops.push(PredOp::Sub {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Mul => ops.push(PredOp::Mul {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Div => ops.push(PredOp::Div {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
+                BinaryOp::Rem => ops.push(PredOp::Mod {
+                    lhs,
+                    rhs,
+                    dst: dst_slot,
+                }),
             }
             Some(dst)
         }
         ExprKind::Call { .. } => {
-            err(diags, "ADGL0501", "calls are not allowed in pure positions", expr.span);
+            err(
+                diags,
+                "ADGL0501",
+                "calls are not allowed in pure positions",
+                expr.span,
+            );
             None
         }
         ExprKind::Index { .. } => {
-            err(diags, "ADGL0501", "indexing is not supported in predicates", expr.span);
+            err(
+                diags,
+                "ADGL0501",
+                "indexing is not supported in predicates",
+                expr.span,
+            );
             None
         }
     }
 }
 
-fn infer_expr_type(expr: &Expr<'_>, env: &RuleEnv, _state: &VerifyState, diags: &mut DiagBuffer) -> Option<FieldType> {
+fn infer_expr_type(
+    expr: &Expr<'_>,
+    env: &RuleEnv,
+    _state: &VerifyState,
+    diags: &mut DiagBuffer,
+) -> Option<FieldType> {
     match &expr.kind {
         ExprKind::Int(_) => Some(FieldType::Int),
         ExprKind::Duration(_) => Some(FieldType::Int),
@@ -1438,25 +1787,52 @@ fn infer_expr_type(expr: &Expr<'_>, env: &RuleEnv, _state: &VerifyState, diags: 
             let lt = infer_expr_type(left, env, _state, diags);
             let rt = infer_expr_type(right, env, _state, diags);
             if let (Some(lt), Some(rt)) = (lt, rt) {
+                if is_int_list_type(lt) || is_int_list_type(rt) {
+                    reject_intlist_predicate_use(expr.span, diags);
+                }
                 match op {
                     BinaryOp::Eq | BinaryOp::Ne => {
                         if !types_compatible_for_equality(lt, rt) {
-                            err(diags, "ADGL0210", "comparison operand type mismatch", expr.span);
+                            err(
+                                diags,
+                                "ADGL0210",
+                                "comparison operand type mismatch",
+                                expr.span,
+                            );
                         }
                     }
                     BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                         if !types_compatible_for_ordering(lt, rt) {
-                            err(diags, "ADGL0210", "ordered comparison requires compatible scalar types", expr.span);
+                            err(
+                                diags,
+                                "ADGL0210",
+                                "ordered comparison requires compatible scalar types",
+                                expr.span,
+                            );
                         }
                     }
                     BinaryOp::In => {
-                        if rt != FieldType::ScopeIdList && rt != FieldType::IntList {
-                            err(diags, "ADGL0210", "`in` RHS must be a list", right.span);
+                        if rt != FieldType::ScopeIdList {
+                            err(
+                                diags,
+                                "ADGL0210",
+                                "`in` RHS must be a ScopeIdList",
+                                right.span,
+                            );
                         }
                     }
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
+                    | BinaryOp::Rem => {
                         if !is_numeric_type(lt) || !is_numeric_type(rt) {
-                            err(diags, "ADGL0210", "arithmetic operands must be numeric", expr.span);
+                            err(
+                                diags,
+                                "ADGL0210",
+                                "arithmetic operands must be numeric",
+                                expr.span,
+                            );
                         }
                     }
                     BinaryOp::And | BinaryOp::Or => {}
@@ -1474,31 +1850,48 @@ fn infer_expr_type(expr: &Expr<'_>, env: &RuleEnv, _state: &VerifyState, diags: 
                 return None;
             };
             let resolved = match binding_ty {
-                BindingTy::Event(event) => {
-                    resolve_metric_path(EventOrBindingType::Event(event), &format!("{}.{}", id.name, field.name))
-                }
-                BindingTy::Cause(cause) => {
-                    resolve_metric_path(EventOrBindingType::Cause(cause), &format!("{}.{}", id.name, field.name))
-                }
-                BindingTy::Problem(problem) => {
-                    resolve_metric_path(EventOrBindingType::Problem(problem), &format!("{}.{}", id.name, field.name))
-                }
+                BindingTy::Event(event) => resolve_metric_path(
+                    EventOrBindingType::Event(event),
+                    &format!("{}.{}", id.name, field.name),
+                ),
+                BindingTy::Cause(cause) => resolve_metric_path(
+                    EventOrBindingType::Cause(cause),
+                    &format!("{}.{}", id.name, field.name),
+                ),
+                BindingTy::Problem(problem) => resolve_metric_path(
+                    EventOrBindingType::Problem(problem),
+                    &format!("{}.{}", id.name, field.name),
+                ),
             };
             if let Some((_idx, ty)) = resolved {
-                Some(ty)
+                if is_int_list_type(ty) {
+                    reject_intlist_predicate_use(expr.span, diags);
+                    None
+                } else {
+                    Some(ty)
+                }
             } else {
                 err(diags, "ADGL0209", "unknown metric path field", field.span);
                 None
             }
         }
         ExprKind::Call { .. } => {
-            err(diags, "ADGL0501", "effectful/topology calls are disallowed in pure expressions", expr.span);
+            err(
+                diags,
+                "ADGL0501",
+                "effectful/topology calls are disallowed in pure expressions",
+                expr.span,
+            );
             None
         }
         ExprKind::Index { base, index } => {
-            infer_expr_type(base, env, _state, diags);
+            if let Some(base_ty) = infer_expr_type(base, env, _state, diags)
+                && is_int_list_type(base_ty)
+            {
+                reject_intlist_predicate_use(expr.span, diags);
+            }
             infer_expr_type(index, env, _state, diags);
-            Some(FieldType::Int)
+            None
         }
     }
 }
@@ -1521,12 +1914,22 @@ fn validate_action_target_types(action: &ActionStmt<'_>, env: &RuleEnv, diags: &
                 ActionTargetType::ScopeIdList => target_ty == FieldType::ScopeIdList,
             });
             if !target_allowed {
-                err(diags, "ADGL0210", "action target type is incompatible with action contract", expr.span);
+                err(
+                    diags,
+                    "ADGL0210",
+                    "action target type is incompatible with action contract",
+                    expr.span,
+                );
             }
         }
         None => {
             if !schema.target_types.is_empty() && schema.kind != ActionKind::SuppressSymptom {
-                err(diags, "ADGL0210", "action requires a target field", action.span);
+                err(
+                    diags,
+                    "ADGL0210",
+                    "action requires a target field",
+                    action.span,
+                );
             }
         }
     }
@@ -1536,9 +1939,27 @@ fn is_numeric_type(ty: FieldType) -> bool {
     matches!(ty, FieldType::Int | FieldType::Confidence)
 }
 
+fn is_int_list_type(ty: FieldType) -> bool {
+    ty == FieldType::IntList
+}
+
+/// `IntList` fields are carried in the event sidecar for evidence only until
+/// list-aware predicate IR exists (`04-type-system.md` §3).
+fn reject_intlist_predicate_use(span: Span, diags: &mut DiagBuffer) {
+    err(
+        diags,
+        "ADGL0213",
+        "IntList fields are evidence-only until list predicate IR exists",
+        span,
+    );
+}
+
 fn types_compatible_for_ordering(left: FieldType, right: FieldType) -> bool {
     (is_numeric_type(left) && is_numeric_type(right))
-        || matches!((left, right), (FieldType::String, FieldType::String) | (FieldType::Severity, FieldType::Severity))
+        || matches!(
+            (left, right),
+            (FieldType::String, FieldType::String) | (FieldType::Severity, FieldType::Severity)
+        )
 }
 
 fn types_compatible_for_equality(left: FieldType, right: FieldType) -> bool {
@@ -1637,16 +2058,26 @@ fn infer_target_scope_expr(expr: &Expr<'_>, env: &RuleEnv) -> Option<ScopeType> 
                 }),
                 BindingTy::Cause(cause) => {
                     if field.name == "target" {
-                        resolve_cause(cause.as_str())
-                            .and_then(|c| if c.valid_scopes.len() == 1 { Some(c.valid_scopes[0]) } else { None })
+                        resolve_cause(cause.as_str()).and_then(|c| {
+                            if c.valid_scopes.len() == 1 {
+                                Some(c.valid_scopes[0])
+                            } else {
+                                None
+                            }
+                        })
                     } else {
                         None
                     }
                 }
                 BindingTy::Problem(problem) => {
                     if field.name == "target" {
-                        resolve_problem(problem.as_str())
-                            .and_then(|p| if p.valid_scopes.len() == 1 { Some(p.valid_scopes[0]) } else { None })
+                        resolve_problem(problem.as_str()).and_then(|p| {
+                            if p.valid_scopes.len() == 1 {
+                                Some(p.valid_scopes[0])
+                            } else {
+                                None
+                            }
+                        })
                     } else {
                         None
                     }
@@ -1661,7 +2092,9 @@ fn correlate_binding_ty(c: &CorrelateBlock<'_>) -> Option<BindingTy> {
     match &c.source {
         AstCorrelateSource::Event(k) => Some(BindingTy::Event(EventType::new(kind_ident_name(k)))),
         AstCorrelateSource::Cause(k) => Some(BindingTy::Cause(CauseKind::new(k.name.to_string()))),
-        AstCorrelateSource::Problem(k) => Some(BindingTy::Problem(ProblemKind::new(k.name.to_string()))),
+        AstCorrelateSource::Problem(k) => {
+            Some(BindingTy::Problem(ProblemKind::new(k.name.to_string())))
+        }
     }
 }
 
@@ -1669,10 +2102,16 @@ fn contains_present_absent(expr: &Expr<'_>) -> bool {
     match &expr.kind {
         ExprKind::Present(_) | ExprKind::Absent(_) => true,
         ExprKind::Unary { expr, .. } => contains_present_absent(expr),
-        ExprKind::Binary { left, right, .. } => contains_present_absent(left) || contains_present_absent(right),
+        ExprKind::Binary { left, right, .. } => {
+            contains_present_absent(left) || contains_present_absent(right)
+        }
         ExprKind::Field { base, .. } => contains_present_absent(base),
-        ExprKind::Call { callee, args } => contains_present_absent(callee) || args.iter().any(contains_present_absent),
-        ExprKind::Index { base, index } => contains_present_absent(base) || contains_present_absent(index),
+        ExprKind::Call { callee, args } => {
+            contains_present_absent(callee) || args.iter().any(contains_present_absent)
+        }
+        ExprKind::Index { base, index } => {
+            contains_present_absent(base) || contains_present_absent(index)
+        }
         _ => false,
     }
 }
@@ -1710,7 +2149,9 @@ fn ruleset_max_forward_window_ms(ruleset: &Ruleset<'_>) -> i64 {
             RuleDecl::Decision(d) => &d.correlates,
         };
         for correlate in correlates {
-            if let Some((_, forward)) = calculable_window(anchor_binding, &correlate.time.start, &correlate.time.end) {
+            if let Some((_, forward)) =
+                calculable_window(anchor_binding, &correlate.time.start, &correlate.time.end)
+            {
                 max_forward = max_forward.max(forward);
             }
         }
@@ -1751,7 +2192,12 @@ fn as_anchor_offset(anchor_binding: &str, expr: &Expr<'_>) -> Option<i64> {
 
 fn check_no_calls(expr: &Expr<'_>, diags: &mut DiagBuffer) {
     match &expr.kind {
-        ExprKind::Call { .. } => err(diags, "ADGL0501", "calls are not allowed in pure expression positions", expr.span),
+        ExprKind::Call { .. } => err(
+            diags,
+            "ADGL0501",
+            "calls are not allowed in pure expression positions",
+            expr.span,
+        ),
         ExprKind::Unary { expr, .. } => check_no_calls(expr, diags),
         ExprKind::Binary { left, right, .. } => {
             check_no_calls(left, diags);
@@ -1885,7 +2331,9 @@ fn expr_depth(expr: &Expr<'_>) -> usize {
         ExprKind::Binary { left, right, .. } => 1 + expr_depth(left).max(expr_depth(right)),
         ExprKind::Field { base, .. } => 1 + expr_depth(base),
         ExprKind::Call { callee, args } => {
-            1 + args.iter().fold(expr_depth(callee), |acc, e| acc.max(expr_depth(e)))
+            1 + args
+                .iter()
+                .fold(expr_depth(callee), |acc, e| acc.max(expr_depth(e)))
         }
         ExprKind::Index { base, index } => 1 + expr_depth(base).max(expr_depth(index)),
         _ => 1,
@@ -1923,7 +2371,11 @@ fn parse_version(v: &str) -> u32 {
 }
 
 fn kind_ident_name(kind: &KindIdent<'_>) -> String {
-    kind.segments.iter().map(|s| s.name).collect::<Vec<_>>().join(".")
+    kind.segments
+        .iter()
+        .map(|s| s.name)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn err(diags: &mut DiagBuffer, code: &'static str, message: impl Into<String>, span: Span) {

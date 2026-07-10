@@ -70,20 +70,24 @@ ingest Evt of type T into scope SG(Evt):
 Anchor срабатывает **раз на matching event per rule**. Повторное срабатывание
 того же правила на том же событии невозможно (event immutable, route — once).
 
-### 3.2 Correlate `correlate x: Source { topo, time }`
+### 3.2 Correlate `correlate x: Source { topo, time [, having] }`
 
 `Source ∈ { event(T), Problem(K), Cause(K) }` ([02 §4](02-grammar.ebnf)
-`CorrelateSource`). При исполнении (после watermark > upper, либо немедленно для
-pure-backward окон) для каждого correlate-блока:
+`CorrelateSource`). Optional `having: count >= N` (`N` — целый литерал
+`1..=32`; опущен ≡ `N = 1`, прежнее earliest-match поведение). При исполнении
+(после watermark > upper, либо немедленно для pure-backward окон) для каждого
+correlate-блока:
 
 ```
 candidates =
   event(T)   -> Ring.scan(T, time.window)                    // [anchor.time - back, anchor.time + fwd], inclusive
   Problem(K) -> Sub.Problems.filter(kind==K, time.window)    // decision-rule correlate (Example 8)
   Cause(K)   -> Sub.Causes.filter(kind==K, time.window)
-matches = [ c ∈ candidates | ⟦topo⟧(anchor, c) == True ]     // C10: Unknown не match
+matches = scan candidates in deterministic order:
+            count True where ⟦topo⟧(anchor, c) == True
+            stop when count == N (work cap; witness = earliest True)
 binding x =
-  если |matches| >= 1:  Some(matches[0])            // earliest; ordering — 09 §5
+  если count >= N:  Some(witness)                   // earliest True among counted matches
   иначе если ∃ c: ⟦topo⟧(anchor, c) == Unknown:     Unknown          // C10
   иначе:                                                Absent
 ```
@@ -94,9 +98,11 @@ binding x =
 логика. `Problem`/`Cause` correlates не требуют WaitQueue-suspend (нет future
 window — они читают уже-эмиссированные узлы), но `time`-окно проверяется.
 
-`present(ptb)` = `binding ∈ {Some}`; `absent(ptb)` = `binding == Absent`;
-`Unknown`-binding → ни present, ни absent не истинны → `else` не выполняется,
-вместо него `action request_topology` (C10, §3.6).
+`present(ptb)` = `binding ∈ {Some}` (т.е. `count >= N`); `absent(ptb)` =
+`binding == Absent`; `Unknown`-binding → ни present, ни absent не истинны →
+`else` не выполняется, вместо него `action request_topology` (C10, §3.6).
+Evidence/provenance ссылается только на witness (earliest True), не на все
+совпавшие кандидаты.
 
 ### 3.3 Infer `infer Cause(K) { target, weight ±, evidence }`
 

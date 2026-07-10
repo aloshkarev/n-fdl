@@ -57,6 +57,7 @@ AnchorBlock   ::= "anchor" Ident ":" "event" "(" EventType ")" [ "{" [ Predicate
 CorrelateBlock::= "correlate" Ident ":" CorrelateSource
                     "{" "topo" ":" TopoPredicate
                          "time" ":" TimeWindow
+                         [ "having" ":" "count" ">=" IntLit ]              (* v1: optional min-match threshold, 1..32; omitted ≡ 1 *)
                     "}" ;                                                      (* deferred eval, C4 *)
                                                                               (* source: event in evidence rules; Problem/Cause in decision rules, Example 8 *)
 

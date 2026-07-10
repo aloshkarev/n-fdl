@@ -201,6 +201,18 @@ of Cause.
   любые call-expression (включая topology/effectful вызовы); допустимы только
   литералы, bindings, сравнения и catalog metric-path доступ (`x.y`).
 
+### 8.2 Correlate min-match (`having: count >= N`)
+
+- Синтаксис: только `having: count >= IntLit` внутри `correlate` (не в pure
+  expression); `count` — ключевое слово, не функция.
+- Диапазон: `N ∈ 1..=32` (compile-time work cap); `N = 0` → `ADGL0504`; `N > 32`
+  → `ADGL0505`.
+- Parsed AST сохраняет исходный `IntLit` как `i64`; проверка диапазона
+  выполняется до понижения в компактный IR, поэтому 257/288/`i64::MAX` не
+  могут обернуться в допустимое значение.
+- Опущенный `having` понижается в IR как `min_match = 1` (поведенческая
+  совместимость v1).
+
 ## 9. DoS limits check (C11)
 
 | Проверка | Лимит | Diagnostic |
@@ -211,6 +223,7 @@ of Cause.
 | `requires` entries | 32 | `ADGL0105` |
 | forward window max | `MAX_LOOKBACK - slack` | `ADGL0412` (§3.1) |
 | dedup window ≥ 1ms | 1ms | `ADGL0503` |
+| correlate `having` min match | `1..=32` | `ADGL0504` (0), `ADGL0505` (>32) |
 | mutually_exclusive group size | 8 | `ADGL0441` |
 
 Превышение — hard `VerificationError` (спека = данные, не должна раздувать

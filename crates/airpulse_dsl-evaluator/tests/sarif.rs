@@ -17,7 +17,13 @@ fn session_scope() -> ScopeId {
     ScopeId::session((0x0a00_0001, 443), (0x0a00_0002, 51234))
 }
 
-fn evt(id: u64, event_type: &str, time_ms: i64, scope: ScopeId, fields: Vec<(FieldIdx, i64)>) -> EventNode {
+fn evt(
+    id: u64,
+    event_type: &str,
+    time_ms: i64,
+    scope: ScopeId,
+    fields: Vec<(FieldIdx, i64)>,
+) -> EventNode {
     EventNode::new(
         EventId::new(id),
         EventType::new(event_type),
@@ -29,13 +35,25 @@ fn evt(id: u64, event_type: &str, time_ms: i64, scope: ScopeId, fields: Vec<(Fie
 }
 
 fn rtx(id: u64, time_ms: i64, scope: ScopeId, segment_size: i64) -> EventNode {
-    evt(id, "tcp.retransmission_burst", time_ms, scope, vec![(fixtures::F_SEGMENT_SIZE, segment_size)])
+    evt(
+        id,
+        "tcp.retransmission_burst",
+        time_ms,
+        scope,
+        vec![(fixtures::F_SEGMENT_SIZE, segment_size)],
+    )
 }
 
 type OfflineEngine<'img> = Engine<'img, StaticTopology, OfflineAuditSink>;
 
 fn offline_engine(img: &airpulse_dsl_ir::ProgramImage, topo: StaticTopology) -> OfflineEngine<'_> {
-    Engine::new(img, topo, OfflineAuditSink::new(), Limits::default(), RunMode::Offline)
+    Engine::new(
+        img,
+        topo,
+        OfflineAuditSink::new(),
+        Limits::default(),
+        RunMode::Offline,
+    )
 }
 
 #[test]
@@ -69,13 +87,19 @@ fn sarif_is_deterministic_for_same_snapshot() {
     let img = fixtures::rule3_pmtud();
     let s = session_scope();
 
-    let mut eng_a = offline_engine(&img, StaticTopology::new(Limits::default().max_topology_hops));
+    let mut eng_a = offline_engine(
+        &img,
+        StaticTopology::new(Limits::default().max_topology_hops),
+    );
     eng_a.ingest(rtx(1, 10_000, s, 1500));
     eng_a.ingest(evt(2, "icmp.ptb", 10_400, s, vec![]));
     eng_a.finish();
     let snap_a = eng_a.snapshot();
 
-    let mut eng_b = offline_engine(&img, StaticTopology::new(Limits::default().max_topology_hops));
+    let mut eng_b = offline_engine(
+        &img,
+        StaticTopology::new(Limits::default().max_topology_hops),
+    );
     eng_b.ingest(rtx(1, 10_000, s, 1500));
     eng_b.ingest(evt(2, "icmp.ptb", 10_400, s, vec![]));
     eng_b.finish();
@@ -94,15 +118,32 @@ fn superseded_problems_are_excluded_from_results() {
     let k1 = eng.intern_scope(r1);
     let k2 = eng.intern_scope(r2);
 
-    eng.ingest(evt(1, stubs::STUB_EVENT_TYPE, 1_000, ScopeId::GLOBAL, vec![(EVENT_FIELD_TARGET, k1)]));
-    eng.ingest(evt(2, stubs::STUB_EVENT_TYPE, 2_000, ScopeId::GLOBAL, vec![(EVENT_FIELD_TARGET, k2)]));
+    eng.ingest(evt(
+        1,
+        stubs::STUB_EVENT_TYPE,
+        1_000,
+        ScopeId::GLOBAL,
+        vec![(EVENT_FIELD_TARGET, k1)],
+    ));
+    eng.ingest(evt(
+        2,
+        stubs::STUB_EVENT_TYPE,
+        2_000,
+        ScopeId::GLOBAL,
+        vec![(EVENT_FIELD_TARGET, k2)],
+    ));
     eng.finish();
 
     let snap = eng.snapshot();
     assert_eq!(snap.problems.iter().filter(|p| p.superseded).count(), 1);
 
     let sarif = to_sarif(&snap);
-    assert_eq!(sarif.matches("\"ruleId\":\"ap_device_unreachable\"").count(), 1);
+    assert_eq!(
+        sarif
+            .matches("\"ruleId\":\"ap_device_unreachable\"")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -117,6 +158,7 @@ fn escaping_handles_quotes_backslashes_and_newlines() {
             severity: Severity::Low,
             sarif_id: SarifId::new("id"),
             cause_kinds: vec![],
+            evidence_fields: std::collections::BTreeMap::new(),
             superseded: false,
         }],
         audit: Vec::new(),
@@ -124,4 +166,53 @@ fn escaping_handles_quotes_backslashes_and_newlines() {
 
     let sarif = to_sarif(&snapshot);
     assert!(sarif.contains("kind\\\"slash\\\\line\\nend"));
+}
+
+#[test]
+fn pii_dst_ip_in_sarif_evidence_respects_strict_privacy() {
+    use airpulse_dsl_catalog::{EventOrBindingType, resolve_metric_path};
+    use airpulse_dsl_evaluator::{SarifOptions, to_sarif_with_options};
+
+    let img = fixtures::rule3_pmtud();
+    let s = session_scope();
+    let dst_idx = resolve_metric_path(
+        EventOrBindingType::Event(&EventType::new("tcp.retransmission_burst")),
+        "dst_ip",
+    )
+    .expect("dst_ip")
+    .0;
+
+    let mut eng_open = offline_engine(
+        &img,
+        StaticTopology::new(Limits::default().max_topology_hops),
+    );
+    eng_open.ingest(evt(
+        1,
+        "tcp.retransmission_burst",
+        10_000,
+        s,
+        vec![(fixtures::F_SEGMENT_SIZE, 1500), (dst_idx, 0x0a00_0001)],
+    ));
+    eng_open.ingest(evt(2, "icmp.ptb", 10_400, s, vec![]));
+    eng_open.finish();
+    let open_sarif = to_sarif_with_options(&eng_open.snapshot(), SarifOptions::default());
+    assert!(open_sarif.contains("\"dst_ip\":\"167772161\""));
+
+    let mut eng_strict = offline_engine(
+        &img,
+        StaticTopology::new(Limits::default().max_topology_hops),
+    );
+    eng_strict = eng_strict.with_strict_privacy(true);
+    eng_strict.ingest(evt(
+        1,
+        "tcp.retransmission_burst",
+        10_000,
+        s,
+        vec![(fixtures::F_SEGMENT_SIZE, 1500), (dst_idx, 0x0a00_0001)],
+    ));
+    eng_strict.ingest(evt(2, "icmp.ptb", 10_400, s, vec![]));
+    eng_strict.finish();
+    let strict_sarif = eng_strict.sarif();
+    assert!(strict_sarif.contains("\"dst_ip\":\"<redacted>\""));
+    assert!(!strict_sarif.contains("\"dst_ip\":\"167772161\""));
 }

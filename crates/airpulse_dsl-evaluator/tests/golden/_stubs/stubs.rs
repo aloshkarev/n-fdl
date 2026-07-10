@@ -73,8 +73,15 @@ fn device_unreachable_verdict() -> RuleInstance {
                         field: CAUSE_FIELD_CONFIDENCE,
                         dst: slot(0),
                     },
-                    PredOp::LoadConst { imm: 80, dst: slot(1) },
-                    PredOp::CmpGe { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                    PredOp::LoadConst {
+                        imm: 80,
+                        dst: slot(1),
+                    },
+                    PredOp::CmpGe {
+                        lhs: slot(0),
+                        rhs: slot(1),
+                        dst: slot(2),
+                    },
                 ]),
                 result: slot(2),
             },

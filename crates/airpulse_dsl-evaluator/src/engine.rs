@@ -27,14 +27,17 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use airpulse_dsl_catalog::{EventOrBindingType, FieldType, resolve_event, resolve_metric_path, resolve_problem};
+use airpulse_dsl_catalog::{
+    EventOrBindingType, FieldType, exclusivity_defaults, resolve_event, resolve_metric_path,
+    resolve_problem,
+};
 use airpulse_dsl_ir::{
-    AnchorKey, CorrelateSource, CorrelateSpec, Intent, PendingMatch, Predicate, ProgramImage,
-    ProvKey, RuleInstance, RuleKind, Symbol, WindowProof,
+    AnchorKey, CorrelateSource, CorrelateSpec, ExclusivityGroup, Intent, PendingMatch, Predicate,
+    ProgramImage, ProvKey, RuleInstance, RuleKind, Symbol, WindowProof,
 };
 use airpulse_dsl_store::{
-    AmbiguityNode, AmbiguityState, CauseNode, EventNode, EvidenceEdge, EvidenceEdgeKind,
-    GraphStore, Limits, ProblemNode, RuntimeProvKey, window_id,
+    AmbiguityNode, AmbiguityState, CauseNode, EdgeEndpoint, EventNode, EvidenceEdge,
+    EvidenceEdgeKind, GraphStore, Limits, ProblemNode, RuntimeProvKey, window_id,
 };
 use airpulse_dsl_types::{
     ActionKind, CauseKind, Confidence, DurationMs, EventTime, MetricPath, NodeId, ProblemKind,
@@ -43,9 +46,11 @@ use airpulse_dsl_types::{
 
 use crate::binding::{Binding, Bound, CauseSnapshot, ProblemSnapshot};
 use crate::diag::EngineDiagnostic;
+use crate::evidence::collect_problem_evidence;
 use crate::extract::{CauseView, ProblemView, Snapshot};
 use crate::interner::ScopeInterner;
 use crate::predicate::{PredCtx, eval_predicate};
+use crate::sarif::{SarifOptions, to_sarif_with_options};
 use crate::sink::{ActionIntent, ActionSink, OfflineAuditSink, RunMode};
 use crate::topology::{TopoFunc, TopologyProvider};
 
@@ -89,6 +94,8 @@ pub struct Engine<'img, T, S> {
     /// Phase 1 uses one engine-wide value, defaulting to
     /// `limits.dedup_window`.
     problem_cooldown: DurationMs,
+    /// Strict privacy for SARIF evidence emission (ADR-009).
+    strict_privacy: bool,
     finished: bool,
     suspended: u64,
     resumed: u64,
@@ -99,8 +106,12 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     /// limits.
     #[must_use]
     pub fn new(image: &'img ProgramImage, topo: T, sink: S, limits: Limits, mode: RunMode) -> Self {
-        let image_max_forward =
-            image.rules.iter().map(RuleInstance::max_forward).max().unwrap_or_default();
+        let image_max_forward = image
+            .rules
+            .iter()
+            .map(RuleInstance::max_forward)
+            .max()
+            .unwrap_or_default();
         let problem_cooldown = limits.dedup_window;
         Engine {
             store: GraphStore::new(limits),
@@ -115,6 +126,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             last_event_time: None,
             image_max_forward,
             problem_cooldown,
+            strict_privacy: false,
             finished: false,
             suspended: 0,
             resumed: 0,
@@ -126,6 +138,19 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     pub fn with_problem_cooldown(mut self, cooldown: DurationMs) -> Self {
         self.problem_cooldown = cooldown;
         self
+    }
+
+    /// Enables strict-privacy redaction for SARIF evidence (`10` §11, ADR-009).
+    #[must_use]
+    pub fn with_strict_privacy(mut self, strict_privacy: bool) -> Self {
+        self.strict_privacy = strict_privacy;
+        self
+    }
+
+    /// Whether strict-privacy redaction is enabled for SARIF emission.
+    #[must_use]
+    pub fn strict_privacy(&self) -> bool {
+        self.strict_privacy
     }
 
     /// Interns a scope for target-key resolution (see
@@ -182,7 +207,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         let mut causes = Vec::new();
         let mut problems = Vec::new();
         for &scope in &self.touched {
-            let Some(part) = self.store.partition(scope) else { continue };
+            let Some(part) = self.store.partition(scope) else {
+                continue;
+            };
             for ((kind, target), node) in &part.causes {
                 causes.push(CauseView {
                     scope,
@@ -207,6 +234,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                         cause_kinds.push(kind.clone());
                     }
                 }
+                let evidence_fields = collect_problem_evidence(&self.store, scope, p, &part);
                 problems.push(ProblemView {
                     scope,
                     kind: p.kind.clone(),
@@ -215,16 +243,19 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     severity: p.severity,
                     sarif_id: p.sarif_id.clone(),
                     cause_kinds,
+                    evidence_fields,
                     superseded: p.superseded,
                 });
             }
         }
-        causes.sort_by(|a, b| {
-            (a.scope, &a.kind, a.target).cmp(&(b.scope, &b.kind, b.target))
-        });
+        causes.sort_by(|a, b| (a.scope, &a.kind, a.target).cmp(&(b.scope, &b.kind, b.target)));
         // Problems: scopes already in sorted (BTreeSet) order; per-scope
         // emission (append) order preserved.
-        Snapshot { causes, problems, audit: Vec::new() }
+        Snapshot {
+            causes,
+            problems,
+            audit: Vec::new(),
+        }
     }
 
     // ── pipeline (07 §5) ─────────────────────────────────────────────────
@@ -264,7 +295,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             return;
         }
         self.finished = true;
-        let Some(last) = self.last_event_time else { return };
+        let Some(last) = self.last_event_time else {
+            return;
+        };
         let one_ms = DurationMs::from_millis(1).unwrap_or_default();
         let flush = last.add(self.image_max_forward).add(one_ms);
         self.advance_watermark(flush);
@@ -281,17 +314,23 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     fn resume_expired(&mut self, wm: EventTime) {
         let expired: Vec<PendingMatch> = self.store.pop_expired(wm);
         for m in expired {
-            let anchor_event =
-                self.store.ring(m.scope).and_then(|ring| ring.get(m.anchor_event).cloned());
+            let anchor_event = self
+                .store
+                .ring(m.scope)
+                .and_then(|ring| ring.get(m.anchor_event).cloned());
             let Some(evt) = anchor_event else {
-                self.diagnostics.push(EngineDiagnostic::MissingAnchor { rule: m.rule.clone() });
+                self.diagnostics.push(EngineDiagnostic::MissingAnchor {
+                    rule: m.rule.clone(),
+                });
                 continue;
             };
             let img = self.image;
             let Some(rule) = img.rules.iter().find(|r| r.id == m.rule) else {
                 // Only possible if the image changed under a live store —
                 // never silently drop the pending match.
-                self.diagnostics.push(EngineDiagnostic::RuleNotInImage { rule: m.rule.clone() });
+                self.diagnostics.push(EngineDiagnostic::RuleNotInImage {
+                    rule: m.rule.clone(),
+                });
                 continue;
             };
             self.resumed += 1;
@@ -305,7 +344,11 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         let img = self.image;
         let scope = event.scope;
         let rules: Vec<&'img RuleInstance> = img
-            .rules_for(AnchorKey::Event(&event.event_type), scope.scope_type(), RuleKind::Evidence)
+            .rules_for(
+                AnchorKey::Event(&event.event_type),
+                scope.scope_type(),
+                RuleKind::Evidence,
+            )
             .collect();
         // One firings budget per ingested event (ADR-011
         // max_rule_firings_per_event), covering decision cascades.
@@ -360,7 +403,8 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         budget: &mut usize,
     ) {
         if *budget == 0 {
-            self.diagnostics.push(EngineDiagnostic::RuleFiringsExceeded { scope });
+            self.diagnostics
+                .push(EngineDiagnostic::RuleFiringsExceeded { scope });
             return;
         }
         *budget -= 1;
@@ -389,8 +433,10 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     }
 
     /// Resolves every correlate binding (`03` §3.2): scan candidates in the
-    /// inclusive window, topo-filter (earliest `True` binds; any `Unknown`
-    /// with no `True` makes the binding `Unknown` — C10; else `Absent`).
+    /// inclusive window and topology-filter in deterministic order. Count
+    /// mode stops after `min_match` true candidates and binds the earliest
+    /// true candidate as its witness. Fewer than `min_match` true candidates
+    /// plus any `Unknown` resolves `Unknown` (C10); otherwise it is `Absent`.
     fn resolve_bindings(
         &mut self,
         rule: &'img RuleInstance,
@@ -402,8 +448,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             let (back, fwd) = match spec.window {
                 WindowProof::Calculable { back, forward } => (back, forward),
                 WindowProof::RuntimeCheck => {
-                    self.diagnostics
-                        .push(EngineDiagnostic::RuntimeCheckWindow { rule: rule.id.clone() });
+                    self.diagnostics.push(EngineDiagnostic::RuntimeCheckWindow {
+                        rule: rule.id.clone(),
+                    });
                     bindings.push(Binding::Absent);
                     continue;
                 }
@@ -428,8 +475,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 CorrelateSource::Problem(kind) => {
                     if let Some(part) = self.store.partition(scope) {
                         for p in part.problems() {
-                            let self_match =
-                                matches!(anchor, Bound::Problem(a) if a.node == p.id);
+                            let self_match = matches!(anchor, Bound::Problem(a) if a.node == p.id);
                             if &p.kind == kind && p.time >= lo && p.time <= hi && !self_match {
                                 candidates.push(Bound::Problem(ProblemSnapshot {
                                     node: p.id,
@@ -447,8 +493,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 CorrelateSource::Cause(kind) => {
                     if let Some(part) = self.store.partition(scope) {
                         for ((k, target), node) in &part.causes {
-                            let self_match =
-                                matches!(anchor, Bound::Cause(a) if a.node == node.id);
+                            let self_match = matches!(anchor, Bound::Cause(a) if a.node == node.id);
                             if k == kind && node.time >= lo && node.time <= hi && !self_match {
                                 candidates.push(Bound::Cause(CauseSnapshot {
                                     node: node.id,
@@ -477,23 +522,35 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     },
                 });
             }
-            let mut bound: Option<Bound> = None;
+            let mut match_count = 0u8;
+            let mut witness: Option<Bound> = None;
             let mut saw_unknown = false;
             for cand in candidates {
                 match self.eval_topo(spec, func, rule, &bindings, &cand) {
                     T3::True => {
-                        bound = Some(cand);
-                        break; // earliest match binds (03 §3.2)
+                        match_count = match_count.saturating_add(1);
+                        if witness.is_none() {
+                            witness = Some(cand);
+                        }
+                        if match_count >= spec.min_match {
+                            break; // earliest witness retained; stop at N (03 §3.2)
+                        }
                     }
                     T3::Unknown => saw_unknown = true,
                     T3::False => {}
                 }
             }
-            bindings.push(match bound {
-                Some(b) => Binding::Bound(b),
-                None if saw_unknown => Binding::Unknown,
-                None => Binding::Absent,
-            });
+            let binding = match (match_count >= spec.min_match, witness, saw_unknown) {
+                (true, Some(witness), _) => Binding::Bound(witness),
+                // Defensive degradation: every true match sets `witness`, but
+                // runtime paths must remain panic-free if that invariant ever
+                // changes. This crate has no logging dependency; diagnostics
+                // are reserved for externally actionable runtime failures.
+                (true, None, _) => Binding::Unknown,
+                (false, _, true) => Binding::Unknown,
+                (false, _, false) => Binding::Absent,
+            };
+            bindings.push(binding);
         }
         bindings
     }
@@ -528,7 +585,10 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             };
             this.resolve_scope_path_from_bound(rule, path, head, bound)
         };
-        match (resolve(self, &spec.topo.args[0]), resolve(self, &spec.topo.args[1])) {
+        match (
+            resolve(self, &spec.topo.args[0]),
+            resolve(self, &spec.topo.args[1]),
+        ) {
             (Some(a), Some(b)) => func.call(&self.topo, a, b),
             _ => T3::Unknown,
         }
@@ -541,12 +601,19 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         bindings: &[Binding],
         scope: ScopeId,
     ) -> Option<T3> {
-        let ctx = PredCtx { bindings, scope, interner: &self.interner, topo: &self.topo };
+        let ctx = PredCtx {
+            bindings,
+            scope,
+            interner: &self.interner,
+            topo: &self.topo,
+        };
         match eval_predicate(pred, &ctx) {
             Ok(t) => Some(t),
             Err(error) => {
-                self.diagnostics
-                    .push(EngineDiagnostic::PredicateError { rule: rule.id.clone(), error });
+                self.diagnostics.push(EngineDiagnostic::PredicateError {
+                    rule: rule.id.clone(),
+                    error,
+                });
                 None
             }
         }
@@ -578,12 +645,13 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         let tail = segments.next();
         if segments.next().is_some() {
             // Current IR/lowering only emits two-segment metric paths.
-            self.diagnostics.push(EngineDiagnostic::UnsupportedTargetTail {
-                rule: rule.id.clone(),
-                path: path.clone(),
-                binding: binding_name.to_string().into_boxed_str(),
-                tail: tail.unwrap_or_default().to_string().into_boxed_str(),
-            });
+            self.diagnostics
+                .push(EngineDiagnostic::UnsupportedTargetTail {
+                    rule: rule.id.clone(),
+                    path: path.clone(),
+                    binding: binding_name.to_string().into_boxed_str(),
+                    tail: tail.unwrap_or_default().to_string().into_boxed_str(),
+                });
             return None;
         }
 
@@ -591,29 +659,33 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             Bound::Event(event) => match tail {
                 None | Some("target") => bound.target(&self.interner),
                 Some(tail_name) => {
-                    let Some(schema) = resolve_event(event.event_type.as_str()) else {
-                        return None;
-                    };
-                    let Some((field_idx, field_ty)) =
-                        resolve_metric_path(EventOrBindingType::Event(&event.event_type), tail_name)
-                    else {
-                        self.diagnostics.push(EngineDiagnostic::UnsupportedTargetTail {
-                            rule: rule.id.clone(),
-                            path: path.clone(),
-                            binding: binding_name.to_string().into_boxed_str(),
-                            tail: tail_name.to_string().into_boxed_str(),
-                        });
+                    let schema = resolve_event(event.event_type.as_str())?;
+                    let Some((field_idx, field_ty)) = resolve_metric_path(
+                        EventOrBindingType::Event(&event.event_type),
+                        tail_name,
+                    ) else {
+                        self.diagnostics
+                            .push(EngineDiagnostic::UnsupportedTargetTail {
+                                rule: rule.id.clone(),
+                                path: path.clone(),
+                                binding: binding_name.to_string().into_boxed_str(),
+                                tail: tail_name.to_string().into_boxed_str(),
+                            });
                         return None;
                     };
                     let is_scope_field = matches!(field_ty, FieldType::ScopeId(_));
-                    let is_routing_path = schema.routing_paths.iter().any(|route| route.path == tail_name);
+                    let is_routing_path = schema
+                        .routing_paths
+                        .iter()
+                        .any(|route| route.path == tail_name);
                     if !(is_routing_path || is_scope_field) {
-                        self.diagnostics.push(EngineDiagnostic::UnsupportedTargetTail {
-                            rule: rule.id.clone(),
-                            path: path.clone(),
-                            binding: binding_name.to_string().into_boxed_str(),
-                            tail: tail_name.to_string().into_boxed_str(),
-                        });
+                        self.diagnostics
+                            .push(EngineDiagnostic::UnsupportedTargetTail {
+                                rule: rule.id.clone(),
+                                path: path.clone(),
+                                binding: binding_name.to_string().into_boxed_str(),
+                                tail: tail_name.to_string().into_boxed_str(),
+                            });
                         return None;
                     }
                     let key = event.field(field_idx)?;
@@ -623,12 +695,13 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             Bound::Cause(_) | Bound::Problem(_) => match tail {
                 None | Some("target") => bound.target(&self.interner),
                 Some(tail_name) => {
-                    self.diagnostics.push(EngineDiagnostic::UnsupportedTargetTail {
-                        rule: rule.id.clone(),
-                        path: path.clone(),
-                        binding: binding_name.to_string().into_boxed_str(),
-                        tail: tail_name.to_string().into_boxed_str(),
-                    });
+                    self.diagnostics
+                        .push(EngineDiagnostic::UnsupportedTargetTail {
+                            rule: rule.id.clone(),
+                            path: path.clone(),
+                            binding: binding_name.to_string().into_boxed_str(),
+                            tail: tail_name.to_string().into_boxed_str(),
+                        });
                     None
                 }
             },
@@ -664,7 +737,14 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     ) {
         for intent in intents {
             match intent {
-                Intent::InferCause { cause, target, weight, evidence, provenance_key, .. } => {
+                Intent::InferCause {
+                    cause,
+                    target,
+                    weight,
+                    evidence,
+                    provenance_key,
+                    ..
+                } => {
                     self.exec_infer(
                         rule,
                         cause,
@@ -678,13 +758,26 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                         budget,
                     );
                 }
-                Intent::EmitProblem { problem, target, severity, evidence, sarif_id, .. } => {
+                Intent::EmitProblem {
+                    problem,
+                    target,
+                    severity,
+                    evidence,
+                    sarif_id,
+                    ..
+                } => {
                     self.exec_emit_problem(
                         rule, problem, target, *severity, evidence, sarif_id, bindings, scope,
                         budget,
                     );
                 }
-                Intent::EmitAction { kind, arg, target, reason, evidence } => {
+                Intent::EmitAction {
+                    kind,
+                    arg,
+                    target,
+                    reason,
+                    evidence,
+                } => {
                     self.exec_action(rule, *kind, arg, target, reason, evidence, bindings);
                 }
                 Intent::SupersedeProblem { problem, target } => {
@@ -746,27 +839,31 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             let exists = part.causes.contains_key(&(cause.clone(), target));
             if !exists && part.causes.len() >= max_causes {
                 drop(part);
-                self.diagnostics.push(EngineDiagnostic::CauseCapacity { scope });
+                self.diagnostics
+                    .push(EngineDiagnostic::CauseCapacity { scope });
                 return;
             }
             if !part.try_insert_provenance(key.clone()) {
                 return; // dedup no-op (03 §3.3, C12)
             }
             let mut created = false;
-            let node = part.causes.entry((cause.clone(), target)).or_insert_with(|| {
-                created = true;
-                CauseNode {
-                    id: NodeId::new(candidate_node_id),
-                    kind: cause.clone(),
-                    target,
-                    // Cause.time = Evt.time at first infer, stable after
-                    // (03 §3.3 comment, 04 §3).
-                    time: anchor_time,
-                    confidence: Confidence::MIN,
-                    evidence: Vec::new(),
-                    provenance: Vec::new(),
-                }
-            });
+            let node = part
+                .causes
+                .entry((cause.clone(), target))
+                .or_insert_with(|| {
+                    created = true;
+                    CauseNode {
+                        id: NodeId::new(candidate_node_id),
+                        kind: cause.clone(),
+                        target,
+                        // Cause.time = Evt.time at first infer, stable after
+                        // (03 §3.3 comment, 04 §3).
+                        time: anchor_time,
+                        confidence: Confidence::MIN,
+                        evidence: Vec::new(),
+                        provenance: Vec::new(),
+                    }
+                });
             node.confidence = node.confidence.apply(weight);
             node.provenance.push(key);
             let dst = node.id;
@@ -778,7 +875,11 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 confidence: node.confidence,
             };
             for src in endpoints {
-                part.edges.push(EvidenceEdge { kind: edge_kind, src, dst });
+                part.edges.push(EvidenceEdge {
+                    kind: edge_kind,
+                    src,
+                    dst,
+                });
             }
             if created {
                 self.next_node_id = candidate_node_id;
@@ -786,6 +887,107 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         } // partition guard dropped before nested execution (store re-entrancy contract)
 
         self.on_confidence_mutation(&mutation, scope, budget);
+        if scope != target && scope.scope_type().is_subsumed_by(target.scope_type()) {
+            self.rollup_cause_to_parent(cause, target, scope, budget);
+        }
+    }
+
+    /// Cross-scope roll-up (`09` §3.2, ADR-003): parent confidence = MAX over
+    /// child partitions that inferred the same `(K, target)`.
+    fn rollup_cause_to_parent(
+        &mut self,
+        cause: &CauseKind,
+        target: ScopeId,
+        child_scope: ScopeId,
+        budget: &mut usize,
+    ) {
+        let parent_scope = target;
+        // PERF: O(P) scan over every touched partition per infer. Fine for
+        // offline per-session replay (few partitions), but a live engine with
+        // many child scopes rolling into one parent should maintain a
+        // children(parent_sg) index (`09` §3.2 `children(parent_sg)`) keyed by
+        // (parent_scope, cause, target) so the MAX is an O(children) lookup —
+        // do not pay an O(all-partitions) walk on every ConfidenceMutation.
+        let mut max_conf = Confidence::MIN;
+        for &scope in &self.touched {
+            if scope == parent_scope {
+                continue;
+            }
+            if !scope.scope_type().is_subsumed_by(parent_scope.scope_type()) {
+                continue;
+            }
+            let Some(part) = self.store.partition(scope) else {
+                continue;
+            };
+            if let Some(node) = part.causes.get(&(cause.clone(), target)) {
+                max_conf = std::cmp::max(max_conf, node.confidence);
+            }
+        }
+        // Child cause node for the RollsUp provenance edge (`09` §3.2).
+        let child_node = self.store.partition(child_scope).and_then(|part| {
+            part.causes
+                .get(&(cause.clone(), target))
+                .map(|node| node.id)
+        });
+
+        self.touched.insert(parent_scope);
+        self.interner.intern(parent_scope);
+        let max_causes = self.store.limits().max_causes_per_scope;
+        let candidate_node_id = self.next_node_id + 1;
+        let mutation: CauseSnapshot;
+        {
+            let mut part = self.store.partition_mut(parent_scope);
+            let exists = part.causes.contains_key(&(cause.clone(), target));
+            if !exists && part.causes.len() >= max_causes {
+                drop(part);
+                self.diagnostics.push(EngineDiagnostic::CauseCapacity {
+                    scope: parent_scope,
+                });
+                return;
+            }
+            let mut created = false;
+            let node = part
+                .causes
+                .entry((cause.clone(), target))
+                .or_insert_with(|| {
+                    created = true;
+                    CauseNode {
+                        id: NodeId::new(candidate_node_id),
+                        kind: cause.clone(),
+                        target,
+                        time: self.store.watermark(),
+                        confidence: Confidence::MIN,
+                        evidence: Vec::new(),
+                        provenance: Vec::new(),
+                    }
+                });
+            node.confidence = max_conf;
+            let dst = node.id;
+            mutation = CauseSnapshot {
+                node: dst,
+                kind: cause.clone(),
+                target,
+                time: node.time,
+                confidence: node.confidence,
+            };
+            // RollsUp{ child → parent } provenance edge (`09` §3.2,
+            // ADR-003); deduped so repeat roll-ups from the same child add
+            // one edge.
+            if let Some(src_node) = child_node {
+                let edge = EvidenceEdge {
+                    kind: EvidenceEdgeKind::RollsUp,
+                    src: EdgeEndpoint::Node(src_node),
+                    dst,
+                };
+                if !part.edges.contains(&edge) {
+                    part.edges.push(edge);
+                }
+            }
+            if created {
+                self.next_node_id = candidate_node_id;
+            }
+        }
+        self.on_confidence_mutation(&mutation, parent_scope, budget);
     }
 
     /// `ConfidenceMutation(K, T)` → decision re-evaluation (`03` §3.5) +
@@ -798,7 +1000,11 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     ) {
         let img = self.image;
         let rules: Vec<&'img RuleInstance> = img
-            .rules_for(AnchorKey::Cause(&snapshot.kind), scope.scope_type(), RuleKind::Decision)
+            .rules_for(
+                AnchorKey::Cause(&snapshot.kind),
+                scope.scope_type(),
+                RuleKind::Decision,
+            )
             .collect();
         for rule in rules {
             let bindings = [Binding::Bound(Bound::Cause(snapshot.clone()))];
@@ -818,7 +1024,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         let img = self.image;
         let target = snapshot.target;
         let wm = self.store.watermark();
-        for group in &img.exclusivity {
+        for group in effective_exclusivity_groups(img) {
             if !group.causes.contains(&snapshot.kind) {
                 continue;
             }
@@ -831,10 +1037,8 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 let c1 = snapshot.confidence;
                 let c2 = {
                     let part = self.store.partition(scope);
-                    part.and_then(|p| {
-                        p.causes.get(&(other.clone(), target)).map(|n| n.confidence)
-                    })
-                    .unwrap_or(Confidence::MIN)
+                    part.and_then(|p| p.causes.get(&(other.clone(), target)).map(|n| n.confidence))
+                        .unwrap_or(Confidence::MIN)
                 };
                 let close = c1.value().abs_diff(c2.value()) < 15;
                 let both_probable = c1.is_probable() && c2.is_probable();
@@ -846,7 +1050,8 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                         if part.ambiguities.contains_key(&(pair.clone(), target)) {
                             false
                         } else {
-                            let other_node = part.causes.get(&(other.clone(), target)).map(|n| n.id);
+                            let other_node =
+                                part.causes.get(&(other.clone(), target)).map(|n| n.id);
                             part.ambiguities.insert(
                                 (pair.clone(), target),
                                 AmbiguityNode {
@@ -863,7 +1068,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                                         schema.severity.unwrap_or(Severity::Medium),
                                     )
                                 })
-                                .unwrap_or_else(|| (SarifId::new("ap_ambiguous"), Severity::Medium));
+                                .unwrap_or_else(|| {
+                                    (SarifId::new("ap_ambiguous"), Severity::Medium)
+                                });
                             let mut evidence = vec![snapshot.node];
                             if let Some(node) = other_node
                                 && !evidence.contains(&node)
@@ -978,8 +1185,12 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 sarif_id: sarif_id.clone(),
                 superseded: false,
             });
-            snapshot =
-                ProblemSnapshot { node: NodeId::new(node_id), kind: problem.clone(), target, time: wm };
+            snapshot = ProblemSnapshot {
+                node: NodeId::new(node_id),
+                kind: problem.clone(),
+                target,
+                time: wm,
+            };
         }
         self.next_node_id = node_id;
         self.on_problem_emission(&snapshot, scope, budget);
@@ -995,7 +1206,11 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     ) {
         let img = self.image;
         let rules: Vec<&'img RuleInstance> = img
-            .rules_for(AnchorKey::Problem(&snapshot.kind), scope.scope_type(), RuleKind::Decision)
+            .rules_for(
+                AnchorKey::Problem(&snapshot.kind),
+                scope.scope_type(),
+                RuleKind::Decision,
+            )
             .collect();
         for rule in rules {
             let bindings = [Binding::Bound(Bound::Problem(snapshot.clone()))];
@@ -1021,8 +1236,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         evidence: &[Symbol],
         bindings: &[Binding],
     ) {
-        let target =
-            target_path.as_ref().and_then(|p| self.resolve_target(rule, p, bindings));
+        let target = target_path
+            .as_ref()
+            .and_then(|p| self.resolve_target(rule, p, bindings));
         let intent = ActionIntent {
             kind,
             rule: rule.id.clone(),
@@ -1089,19 +1305,17 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         let node_id = self.next_node_id + 1;
         let created = {
             let mut part = self.store.partition_mut(scope);
-            if part.ambiguities.contains_key(&(pair.clone(), target)) {
-                false
-            } else {
-                part.ambiguities.insert(
-                    (pair.clone(), target),
-                    AmbiguityNode {
+            match part.ambiguities.entry((pair.clone(), target)) {
+                std::collections::hash_map::Entry::Occupied(_) => false,
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(AmbiguityNode {
                         id: NodeId::new(node_id),
                         causes: pair.clone(),
                         target,
                         state: AmbiguityState::Active,
-                    },
-                );
-                true
+                    });
+                    true
+                }
             }
         };
         if created {
@@ -1130,11 +1344,24 @@ impl<'img, T: TopologyProvider> Engine<'img, T, OfflineAuditSink> {
         let mut snap = self.graph_snapshot();
         let mut audit: Vec<_> = self.sink().entries().to_vec();
         audit.sort_by(|a, b| {
-            (a.wm, a.intent.rule.as_str(), a.intent.kind, a.intent.target)
-                .cmp(&(b.wm, b.intent.rule.as_str(), b.intent.kind, b.intent.target))
+            (a.wm, a.intent.rule.as_str(), a.intent.kind, a.intent.target).cmp(&(
+                b.wm,
+                b.intent.rule.as_str(),
+                b.intent.kind,
+                b.intent.target,
+            ))
         });
         snap.audit = audit;
         snap
+    }
+
+    /// Emits SARIF for the current graph state, honoring [`Engine::strict_privacy`].
+    #[must_use]
+    pub fn sarif(&self) -> String {
+        let options = SarifOptions {
+            strict_privacy: self.strict_privacy,
+        };
+        to_sarif_with_options(&self.snapshot(), options)
     }
 }
 
@@ -1144,7 +1371,29 @@ fn binding_index_of(rule: &RuleInstance, name: &str) -> Option<usize> {
     if rule.anchor.binding.as_str() == name {
         return Some(0);
     }
-    rule.correlates.iter().position(|c| c.binding.as_str() == name).map(|i| i + 1)
+    rule.correlates
+        .iter()
+        .position(|c| c.binding.as_str() == name)
+        .map(|i| i + 1)
+}
+
+/// Ruleset exclusivity merged with catalog defaults (`10` §7, ADR-005).
+fn effective_exclusivity_groups(image: &ProgramImage) -> Vec<ExclusivityGroup> {
+    let mut groups: Vec<ExclusivityGroup> = image.exclusivity.to_vec();
+    for pair in exclusivity_defaults() {
+        let catalog_group = ExclusivityGroup {
+            causes: Box::new([pair.left.clone(), pair.right.clone()]),
+        };
+        let duplicate = groups.iter().any(|group| {
+            group.causes.len() == 2
+                && ((group.causes[0] == pair.left && group.causes[1] == pair.right)
+                    || (group.causes[0] == pair.right && group.causes[1] == pair.left))
+        });
+        if !duplicate {
+            groups.push(catalog_group);
+        }
+    }
+    groups
 }
 
 /// Deterministic candidate ordering: earliest time first, node id

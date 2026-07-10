@@ -1,0 +1,83 @@
+---
+source: third_party/n-fdl/crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+assertion_line: 290
+expression: snap
+---
+Snapshot {
+    causes: [
+        CauseView {
+            scope: ScopeId {
+                scope_type: ClientMac,
+                key: 3770514931035368118,
+            },
+            kind: CauseKind(
+                "AuthServerOutage",
+            ),
+            target: ScopeId {
+                scope_type: Vlan,
+                key: 12161933625739840919,
+            },
+            time: EventTime(
+                20000,
+            ),
+            confidence: Confidence(
+                50,
+            ),
+        },
+        CauseView {
+            scope: ScopeId {
+                scope_type: Vlan,
+                key: 12161933625739840919,
+            },
+            kind: CauseKind(
+                "AuthServerOutage",
+            ),
+            target: ScopeId {
+                scope_type: Vlan,
+                key: 12161933625739840919,
+            },
+            time: EventTime(
+                20000,
+            ),
+            confidence: Confidence(
+                50,
+            ),
+        },
+    ],
+    problems: [],
+    audit: [
+        AuditEntry {
+            code: Some(
+                "ADGL3001",
+            ),
+            intent: ActionIntent {
+                kind: RequestObservation,
+                rule: RuleId(
+                    "dhcp_timeout_missing_auth",
+                ),
+                arg: Some(
+                    Symbol(
+                        "aaa.telemetry",
+                    ),
+                ),
+                target: Some(
+                    ScopeId {
+                        scope_type: Vlan,
+                        key: 12161933625739840919,
+                    },
+                ),
+                target_path: Some(
+                    MetricPath(
+                        "dhcp.vlan",
+                    ),
+                ),
+                reason: None,
+                evidence: [],
+                causes: None,
+            },
+            wm: EventTime(
+                20000,
+            ),
+        },
+    ],
+}

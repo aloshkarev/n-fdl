@@ -10,7 +10,7 @@ use winnow::token::take_while;
 
 use crate::ast::{
     ActionField, ActionName, ActionStmt, AnchorBlock, BinaryOp, CauseAnchor, CorrelateBlock,
-    CorrelateSource, Decl, DecisionAnchor, DecisionRule, DurationLit, EmitField, EmitStmt,
+    CorrelateSource, DecisionAnchor, DecisionRule, Decl, DurationLit, EmitField, EmitStmt,
     EvidenceRule, Expr, ExprKind, Ident, IfElseBlock, InferField, InferStmt, IntLit, KindIdent,
     MutuallyExclusiveDecl, ProblemAnchor, RequiresDecl, RuleDecl, Ruleset, RulesetHeader, Stmt,
     StringLit, TimeWindow, TopoPredicate, UnaryOp,
@@ -94,6 +94,7 @@ const KEYWORDS: &[&str] = &[
     "scope",
     "anchor",
     "correlate",
+    "having",
     "infer",
     "emit",
     "action",
@@ -476,7 +477,14 @@ impl<'a> Lexer<'a> {
         let mut input = self.rest();
         let parsed: &str = take_while::<_, _, InputError<&str>>(1.., is_ident_continue)
             .parse_next(&mut input)
-            .map_err(|_| ParseErr::new("ADGL0100", "malformed identifier", "identifier", Span::new(start, start + 1)))?;
+            .map_err(|_| {
+                ParseErr::new(
+                    "ADGL0100",
+                    "malformed identifier",
+                    "identifier",
+                    Span::new(start, start + 1),
+                )
+            })?;
         if parsed.len() > 255 {
             return Err(ParseErr::new(
                 "ADGL0101",
@@ -555,7 +563,14 @@ impl<'a> Lexer<'a> {
         let parsed = if radix == 10 {
             digits.parse::<i64>()
         } else {
-            i64::from_str_radix(digits.trim_start_matches("0x").trim_start_matches("0X").trim_start_matches("0b").trim_start_matches("0B"), radix)
+            i64::from_str_radix(
+                digits
+                    .trim_start_matches("0x")
+                    .trim_start_matches("0X")
+                    .trim_start_matches("0b")
+                    .trim_start_matches("0B"),
+                radix,
+            )
         };
         let value = parsed.map_err(|_| {
             ParseErr::new(
@@ -593,7 +608,10 @@ impl<'a> Lexer<'a> {
                 "ADGL0110",
                 "malformed duration unit",
                 "duration unit: ms, s, min",
-                Span::new(start, start + end + unit_rest.chars().take(3).map(char::len_utf8).sum::<usize>()),
+                Span::new(
+                    start,
+                    start + end + unit_rest.chars().take(3).map(char::len_utf8).sum::<usize>(),
+                ),
             ));
         }
 
@@ -656,7 +674,7 @@ impl<'a> Lexer<'a> {
                             format!("unknown escape '\\{}'", other),
                             "valid string escape",
                             Span::new(start, self.pos),
-                        ))
+                        ));
                     }
                     None => {
                         return Err(ParseErr::new(
@@ -664,7 +682,7 @@ impl<'a> Lexer<'a> {
                             "unterminated string",
                             "closing quote",
                             Span::new(start, self.pos),
-                        ))
+                        ));
                     }
                 };
                 out.push(esc);
@@ -706,6 +724,7 @@ fn keyword_static(s: &str) -> &'static str {
         "scope" => "scope",
         "anchor" => "anchor",
         "correlate" => "correlate",
+        "having" => "having",
         "infer" => "infer",
         "emit" => "emit",
         "action" => "action",
@@ -820,8 +839,12 @@ impl<'a> ParserState<'a> {
         let mut rules = Vec::new();
         loop {
             match self.peek_kind() {
-                TokenKind::Kw("evidence") => rules.push(RuleDecl::Evidence(self.parse_evidence_rule()?)),
-                TokenKind::Kw("decision") => rules.push(RuleDecl::Decision(self.parse_decision_rule()?)),
+                TokenKind::Kw("evidence") => {
+                    rules.push(RuleDecl::Evidence(self.parse_evidence_rule()?))
+                }
+                TokenKind::Kw("decision") => {
+                    rules.push(RuleDecl::Decision(self.parse_decision_rule()?))
+                }
                 _ => break,
             }
         }
@@ -851,10 +874,12 @@ impl<'a> ParserState<'a> {
         let mut decls = Vec::new();
         loop {
             match self.peek_kind() {
-                TokenKind::Kw("requires") => decls.push(Decl::Requires(self.parse_requires_decl()?)),
-                TokenKind::Kw("mutually_exclusive") => {
-                    decls.push(Decl::MutuallyExclusive(self.parse_mutually_exclusive_decl()?))
+                TokenKind::Kw("requires") => {
+                    decls.push(Decl::Requires(self.parse_requires_decl()?))
                 }
+                TokenKind::Kw("mutually_exclusive") => decls.push(Decl::MutuallyExclusive(
+                    self.parse_mutually_exclusive_decl()?,
+                )),
                 _ => break,
             }
         }
@@ -1056,7 +1081,10 @@ impl<'a> ParserState<'a> {
                 } else {
                     None
                 };
-                let end = predicate.as_ref().map(|p| p.span.end).unwrap_or(problem.span.end);
+                let end = predicate
+                    .as_ref()
+                    .map(|p| p.span.end)
+                    .unwrap_or(problem.span.end);
                 Ok(DecisionAnchor::Problem(ProblemAnchor {
                     binding,
                     problem,
@@ -1086,14 +1114,43 @@ impl<'a> ParserState<'a> {
         let _ = self.consume_word_exact("time")?;
         let _ = self.consume_punct(TokenKind::Colon, ":")?;
         let time = self.parse_time_window()?;
+        let min_match = self.parse_optional_min_match()?;
         let end = self.consume_punct(TokenKind::RBrace, "}")?.end;
         Ok(CorrelateBlock {
             binding,
             source,
             topo,
             time,
+            min_match,
             span: Span::new(start, end),
         })
+    }
+
+    fn parse_optional_min_match(&mut self) -> Result<Option<crate::ast::MinMatchClause>, ParseErr> {
+        if !matches!(self.peek_kind(), TokenKind::Kw("having")) {
+            return Ok(None);
+        }
+        let _ = self.consume_kw("having")?;
+        let _ = self.consume_punct(TokenKind::Colon, ":")?;
+        let _ = self.consume_word_exact("count")?;
+        let _ = self.consume_punct(TokenKind::Ge, ">=")?;
+        let tok = self.consume_kind("integer", |k| matches!(k, TokenKind::Int(_)))?;
+        let lit = match tok.kind {
+            TokenKind::Int(v) => v,
+            _ => 0,
+        };
+        if lit < 0 {
+            return Err(ParseErr::new(
+                "ADGL0100",
+                "min match count must be a non-negative integer literal",
+                "non-negative integer literal",
+                tok.span,
+            ));
+        }
+        Ok(Some(crate::ast::MinMatchClause {
+            count: lit,
+            span: tok.span,
+        }))
     }
 
     fn parse_correlate_source(&mut self) -> Result<CorrelateSource<'a>, ParseErr> {
@@ -1339,7 +1396,10 @@ impl<'a> ParserState<'a> {
             }
             "severity" => {
                 let sev = self.parse_severity()?;
-                Ok(EmitField::Severity(sev, Span::new(key_span.start, self.prev_end())))
+                Ok(EmitField::Severity(
+                    sev,
+                    Span::new(key_span.start, self.prev_end()),
+                ))
             }
             "evidence" => {
                 let refs = self.parse_ref_list()?;
@@ -1482,12 +1542,17 @@ impl<'a> ParserState<'a> {
 
     fn parse_kind_ident(&mut self) -> Result<KindIdent<'a>, ParseErr> {
         // EBNF: KindIdent ::= Ident { "." Ident } ;
-        let first = self.parse_ident_any()?;
-        let start = first.span.start;
-        let mut segments = vec![first];
+        // Catalog event names may use reserved words as path segments (e.g. wifi.mgmt.action).
+        let (name, start_span) = self.parse_word_any()?;
+        let start = start_span.start;
+        let mut segments = vec![Ident {
+            name,
+            span: start_span,
+        }];
         while matches!(self.peek_kind(), TokenKind::Dot) {
             let _ = self.next();
-            segments.push(self.parse_ident_any()?);
+            let (name, span) = self.parse_word_any()?;
+            segments.push(Ident { name, span });
         }
         let end = segments.last().map(|s| s.span.end).unwrap_or(start);
         Ok(KindIdent {
@@ -1513,7 +1578,9 @@ impl<'a> ParserState<'a> {
     }
 
     fn parse_ident_any(&mut self) -> Result<Ident<'a>, ParseErr> {
-        let tok = self.consume_kind("identifier", |k| matches!(k, TokenKind::Ident(_) | TokenKind::Kw(_)))?;
+        let tok = self.consume_kind("identifier", |k| {
+            matches!(k, TokenKind::Ident(_) | TokenKind::Kw(_))
+        })?;
         let name = match tok.kind {
             TokenKind::Ident(s) => s,
             TokenKind::Kw(s) if matches!(s, "event" | "Cause" | "Problem") => s,
@@ -1523,15 +1590,20 @@ impl<'a> ParserState<'a> {
                     "reserved keyword is not allowed here",
                     "identifier (non-keyword)",
                     tok.span,
-                ))
+                ));
             }
             _ => unreachable!("consume_kind filtered non-ident token"),
         };
-        Ok(Ident { name, span: tok.span })
+        Ok(Ident {
+            name,
+            span: tok.span,
+        })
     }
 
     fn parse_word_any(&mut self) -> Result<(&'a str, Span), ParseErr> {
-        let tok = self.consume_kind("identifier or keyword", |k| matches!(k, TokenKind::Ident(_) | TokenKind::Kw(_)))?;
+        let tok = self.consume_kind("identifier or keyword", |k| {
+            matches!(k, TokenKind::Ident(_) | TokenKind::Kw(_))
+        })?;
         match tok.kind {
             TokenKind::Ident(name) => Ok((name, tok.span)),
             TokenKind::Kw(name) => Ok((name, tok.span)),
@@ -1547,11 +1619,20 @@ impl<'a> ParserState<'a> {
                 span: tok.span,
             })
         } else {
-            Err(ParseErr::new("ADGL0100", "expected identifier", "identifier", tok.span))
+            Err(ParseErr::new(
+                "ADGL0100",
+                "expected identifier",
+                "identifier",
+                tok.span,
+            ))
         }
     }
 
-    fn consume_punct(&mut self, kind: TokenKind<'a>, expected: &'static str) -> Result<Span, ParseErr> {
+    fn consume_punct(
+        &mut self,
+        kind: TokenKind<'a>,
+        expected: &'static str,
+    ) -> Result<Span, ParseErr> {
         if std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(&kind) {
             let sp = self.peek().span;
             let _ = self.next();
@@ -1587,7 +1668,8 @@ impl<'a> ParserState<'a> {
     fn parse_logic_or(&mut self) -> Result<Expr<'a>, ParseErr> {
         let mut left = self.parse_logic_and()?;
         loop {
-            let is_or = matches!(self.peek_kind(), TokenKind::OrOr) || matches!(self.peek_kind(), TokenKind::Kw("or"));
+            let is_or = matches!(self.peek_kind(), TokenKind::OrOr)
+                || matches!(self.peek_kind(), TokenKind::Kw("or"));
             if !is_or {
                 break;
             }
@@ -1610,7 +1692,8 @@ impl<'a> ParserState<'a> {
     fn parse_logic_and(&mut self) -> Result<Expr<'a>, ParseErr> {
         let mut left = self.parse_equality()?;
         loop {
-            let is_and = matches!(self.peek_kind(), TokenKind::AndAnd) || matches!(self.peek_kind(), TokenKind::Kw("and"));
+            let is_and = matches!(self.peek_kind(), TokenKind::AndAnd)
+                || matches!(self.peek_kind(), TokenKind::Kw("and"));
             if !is_and {
                 break;
             }
@@ -1952,8 +2035,17 @@ mod tests {
     #[test]
     fn lex_duration_variants() {
         let tokens = tokenize("500ms 1s 2min").unwrap_or_default();
-        assert!(matches!(tokens.first().map(|t| &t.kind), Some(TokenKind::Duration(500))));
-        assert!(matches!(tokens.get(1).map(|t| &t.kind), Some(TokenKind::Duration(1000))));
-        assert!(matches!(tokens.get(2).map(|t| &t.kind), Some(TokenKind::Duration(120000))));
+        assert!(matches!(
+            tokens.first().map(|t| &t.kind),
+            Some(TokenKind::Duration(500))
+        ));
+        assert!(matches!(
+            tokens.get(1).map(|t| &t.kind),
+            Some(TokenKind::Duration(1000))
+        ));
+        assert!(matches!(
+            tokens.get(2).map(|t| &t.kind),
+            Some(TokenKind::Duration(120000))
+        ));
     }
 }

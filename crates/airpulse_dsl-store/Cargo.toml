@@ -7,4 +7,5 @@ rust-version = "1.85"
 [dependencies]
 airpulse_dsl-types = { path = "../airpulse_dsl-types" }
 airpulse_dsl-ir = { path = "../airpulse_dsl-ir" }
-dashmap = { workspace = true }
+# concrete version (matching workspace.dependencies) for cross-workspace path-dep use
+dashmap = "6"

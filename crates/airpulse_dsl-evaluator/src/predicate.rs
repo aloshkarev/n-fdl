@@ -74,26 +74,28 @@ fn as_truth(slot: Slot, op: &'static str) -> Result<T3, CorrelateError> {
     }
 }
 
-fn binding<'a>(
-    bindings: &'a [Binding],
-    idx: BindingIdx,
-) -> Result<&'a Binding, CorrelateError> {
-    bindings.get(idx.0 as usize).ok_or(CorrelateError::UnknownBinding { binding: idx.0 })
+fn binding(bindings: &[Binding], idx: BindingIdx) -> Result<&Binding, CorrelateError> {
+    bindings
+        .get(idx.0 as usize)
+        .ok_or(CorrelateError::UnknownBinding { binding: idx.0 })
 }
 
 fn load_event_field(b: &Binding, field: FieldIdx) -> Result<Slot, CorrelateError> {
     match b {
         Binding::Bound(Bound::Event(e)) => Ok(match field {
             f if f == EVENT_FIELD_TIME => Slot::Int(e.time.millis()),
-            f if f == EVENT_FIELD_TARGET => {
-                Slot::Int(e.field(EVENT_FIELD_TARGET).unwrap_or_else(|| scope_key_i64(e.scope)))
-            }
+            f if f == EVENT_FIELD_TARGET => Slot::Int(
+                e.field(EVENT_FIELD_TARGET)
+                    .unwrap_or_else(|| scope_key_i64(e.scope)),
+            ),
             f => match e.field(f) {
                 Some(v) => Slot::Int(v),
                 None => Slot::Truth(T3::Unknown), // Option<τ> field absent (04 §1)
             },
         }),
-        Binding::Bound(_) => Err(CorrelateError::TypeMismatch { op: "LOAD_EVENT_FIELD" }),
+        Binding::Bound(_) => Err(CorrelateError::TypeMismatch {
+            op: "LOAD_EVENT_FIELD",
+        }),
         Binding::Absent | Binding::Unknown => Ok(Slot::Truth(T3::Unknown)),
     }
 }
@@ -106,7 +108,9 @@ fn load_cause_field(b: &Binding, field: FieldIdx) -> Result<Slot, CorrelateError
             f if f == CAUSE_FIELD_TIME => Ok(Slot::Int(c.time.millis())),
             _ => Ok(Slot::Truth(T3::Unknown)),
         },
-        Binding::Bound(_) => Err(CorrelateError::TypeMismatch { op: "LOAD_CAUSE_FIELD" }),
+        Binding::Bound(_) => Err(CorrelateError::TypeMismatch {
+            op: "LOAD_CAUSE_FIELD",
+        }),
         Binding::Absent | Binding::Unknown => Ok(Slot::Truth(T3::Unknown)),
     }
 }
@@ -118,7 +122,9 @@ fn load_problem_field(b: &Binding, field: FieldIdx) -> Result<Slot, CorrelateErr
             f if f == PROBLEM_FIELD_TIME => Ok(Slot::Int(p.time.millis())),
             _ => Ok(Slot::Truth(T3::Unknown)),
         },
-        Binding::Bound(_) => Err(CorrelateError::TypeMismatch { op: "LOAD_PROBLEM_FIELD" }),
+        Binding::Bound(_) => Err(CorrelateError::TypeMismatch {
+            op: "LOAD_PROBLEM_FIELD",
+        }),
         Binding::Absent | Binding::Unknown => Ok(Slot::Truth(T3::Unknown)),
     }
 }
@@ -162,13 +168,25 @@ pub fn eval_predicate(pred: &Predicate, ctx: &PredCtx<'_>) -> Result<T3, Correla
 
     for op in &pred.ops {
         match op {
-            PredOp::LoadEventField { binding: b, field, dst } => {
+            PredOp::LoadEventField {
+                binding: b,
+                field,
+                dst,
+            } => {
                 slots[dst.index()] = load_event_field(binding(ctx.bindings, *b)?, *field)?;
             }
-            PredOp::LoadCauseField { binding: b, field, dst } => {
+            PredOp::LoadCauseField {
+                binding: b,
+                field,
+                dst,
+            } => {
                 slots[dst.index()] = load_cause_field(binding(ctx.bindings, *b)?, *field)?;
             }
-            PredOp::LoadProblemField { binding: b, field, dst } => {
+            PredOp::LoadProblemField {
+                binding: b,
+                field,
+                dst,
+            } => {
                 slots[dst.index()] = load_problem_field(binding(ctx.bindings, *b)?, *field)?;
             }
             PredOp::LoadConst { imm, dst } => slots[dst.index()] = Slot::Int(*imm),
@@ -178,61 +196,70 @@ pub fn eval_predicate(pred: &Predicate, ctx: &PredCtx<'_>) -> Result<T3, Correla
             }
 
             PredOp::Add { lhs, rhs, dst } => {
-                slots[dst.index()] =
-                    arith(get(&slots, *lhs), get(&slots, *rhs), "ADD", |a, b| {
-                        checked(a.checked_add(b))
-                    })?;
+                slots[dst.index()] = arith(get(&slots, *lhs), get(&slots, *rhs), "ADD", |a, b| {
+                    checked(a.checked_add(b))
+                })?;
             }
             PredOp::Sub { lhs, rhs, dst } => {
-                slots[dst.index()] =
-                    arith(get(&slots, *lhs), get(&slots, *rhs), "SUB", |a, b| {
-                        checked(a.checked_sub(b))
-                    })?;
+                slots[dst.index()] = arith(get(&slots, *lhs), get(&slots, *rhs), "SUB", |a, b| {
+                    checked(a.checked_sub(b))
+                })?;
             }
             PredOp::Mul { lhs, rhs, dst } => {
-                slots[dst.index()] =
-                    arith(get(&slots, *lhs), get(&slots, *rhs), "MUL", |a, b| {
-                        checked(a.checked_mul(b))
-                    })?;
+                slots[dst.index()] = arith(get(&slots, *lhs), get(&slots, *rhs), "MUL", |a, b| {
+                    checked(a.checked_mul(b))
+                })?;
             }
             PredOp::Div { lhs, rhs, dst } => {
-                slots[dst.index()] =
-                    arith(get(&slots, *lhs), get(&slots, *rhs), "DIV", |a, b| {
-                        if b == 0 {
-                            Err(CorrelateError::DivisionByZero)
-                        } else {
-                            checked(a.checked_div(b))
-                        }
-                    })?;
+                slots[dst.index()] = arith(get(&slots, *lhs), get(&slots, *rhs), "DIV", |a, b| {
+                    if b == 0 {
+                        Err(CorrelateError::DivisionByZero)
+                    } else {
+                        checked(a.checked_div(b))
+                    }
+                })?;
             }
             PredOp::Mod { lhs, rhs, dst } => {
-                slots[dst.index()] =
-                    arith(get(&slots, *lhs), get(&slots, *rhs), "MOD", |a, b| {
-                        if b == 0 {
-                            Err(CorrelateError::DivisionByZero)
-                        } else {
-                            checked(a.checked_rem(b))
-                        }
-                    })?;
+                slots[dst.index()] = arith(get(&slots, *lhs), get(&slots, *rhs), "MOD", |a, b| {
+                    if b == 0 {
+                        Err(CorrelateError::DivisionByZero)
+                    } else {
+                        checked(a.checked_rem(b))
+                    }
+                })?;
             }
 
             PredOp::CmpEq { lhs, rhs, dst } => {
-                slots[dst.index()] = cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_EQ", |a, b| a == b)?;
+                slots[dst.index()] =
+                    cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_EQ", |a, b| {
+                        a == b
+                    })?;
             }
             PredOp::CmpNe { lhs, rhs, dst } => {
-                slots[dst.index()] = cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_NE", |a, b| a != b)?;
+                slots[dst.index()] =
+                    cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_NE", |a, b| {
+                        a != b
+                    })?;
             }
             PredOp::CmpLt { lhs, rhs, dst } => {
-                slots[dst.index()] = cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_LT", |a, b| a < b)?;
+                slots[dst.index()] =
+                    cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_LT", |a, b| a < b)?;
             }
             PredOp::CmpLe { lhs, rhs, dst } => {
-                slots[dst.index()] = cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_LE", |a, b| a <= b)?;
+                slots[dst.index()] =
+                    cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_LE", |a, b| {
+                        a <= b
+                    })?;
             }
             PredOp::CmpGt { lhs, rhs, dst } => {
-                slots[dst.index()] = cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_GT", |a, b| a > b)?;
+                slots[dst.index()] =
+                    cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_GT", |a, b| a > b)?;
             }
             PredOp::CmpGe { lhs, rhs, dst } => {
-                slots[dst.index()] = cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_GE", |a, b| a >= b)?;
+                slots[dst.index()] =
+                    cmp(get(&slots, *lhs), get(&slots, *rhs), "CMP_GE", |a, b| {
+                        a >= b
+                    })?;
             }
 
             PredOp::And { lhs, rhs, dst } => {
@@ -270,8 +297,10 @@ pub fn eval_predicate(pred: &Predicate, ctx: &PredCtx<'_>) -> Result<T3, Correla
             PredOp::TopoCall { func, a, b, dst } => {
                 let f = TopoFunc::from_idx(*func)
                     .ok_or(CorrelateError::UnknownTopoFunction { func: func.0 })?;
-                let t = match (as_num(get(&slots, *a), "TOPO_CALL")?, as_num(get(&slots, *b), "TOPO_CALL")?)
-                {
+                let t = match (
+                    as_num(get(&slots, *a), "TOPO_CALL")?,
+                    as_num(get(&slots, *b), "TOPO_CALL")?,
+                ) {
                     (Some(ka), Some(kb)) => {
                         match (ctx.interner.resolve(ka), ctx.interner.resolve(kb)) {
                             (Some(sa), Some(sb)) => f.call(ctx.topo, sa, sb),
@@ -340,7 +369,12 @@ mod tests {
         let topo = StaticTopology::new(4);
         let mut interner = ScopeInterner::new();
         interner.intern(ScopeId::vlan(1));
-        let ctx = PredCtx { bindings, scope: ScopeId::vlan(1), interner: &interner, topo: &topo };
+        let ctx = PredCtx {
+            bindings,
+            scope: ScopeId::vlan(1),
+            interner: &interner,
+            topo: &topo,
+        };
         eval_predicate(pred, &ctx)
     }
 
@@ -349,9 +383,19 @@ mod tests {
         // 06 §8 item 6: overflow → CorrelateError::ArithOverflow.
         let overflow = Predicate {
             ops: Box::new([
-                PredOp::LoadConst { imm: i64::MAX, dst: slot(0) },
-                PredOp::LoadConst { imm: 1, dst: slot(1) },
-                PredOp::Add { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                PredOp::LoadConst {
+                    imm: i64::MAX,
+                    dst: slot(0),
+                },
+                PredOp::LoadConst {
+                    imm: 1,
+                    dst: slot(1),
+                },
+                PredOp::Add {
+                    lhs: slot(0),
+                    rhs: slot(1),
+                    dst: slot(2),
+                },
             ]),
             result: slot(2),
         };
@@ -359,20 +403,43 @@ mod tests {
 
         let div_zero = Predicate {
             ops: Box::new([
-                PredOp::LoadConst { imm: 7, dst: slot(0) },
-                PredOp::LoadConst { imm: 0, dst: slot(1) },
-                PredOp::Div { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                PredOp::LoadConst {
+                    imm: 7,
+                    dst: slot(0),
+                },
+                PredOp::LoadConst {
+                    imm: 0,
+                    dst: slot(1),
+                },
+                PredOp::Div {
+                    lhs: slot(0),
+                    rhs: slot(1),
+                    dst: slot(2),
+                },
             ]),
             result: slot(2),
         };
-        assert_eq!(run_pred(&div_zero, &[]), Err(CorrelateError::DivisionByZero));
+        assert_eq!(
+            run_pred(&div_zero, &[]),
+            Err(CorrelateError::DivisionByZero)
+        );
 
         // i64::MIN / -1 overflows too.
         let min_div = Predicate {
             ops: Box::new([
-                PredOp::LoadConst { imm: i64::MIN, dst: slot(0) },
-                PredOp::LoadConst { imm: -1, dst: slot(1) },
-                PredOp::Div { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                PredOp::LoadConst {
+                    imm: i64::MIN,
+                    dst: slot(0),
+                },
+                PredOp::LoadConst {
+                    imm: -1,
+                    dst: slot(1),
+                },
+                PredOp::Div {
+                    lhs: slot(0),
+                    rhs: slot(1),
+                    dst: slot(2),
+                },
             ]),
             result: slot(2),
         };
@@ -384,14 +451,31 @@ mod tests {
         // 03 §3.7: metric comparisons are Bool lifted to T3.
         let gt_1400 = Predicate {
             ops: Box::new([
-                PredOp::LoadEventField { binding: BindingIdx(0), field: FieldIdx(0), dst: slot(0) },
-                PredOp::LoadConst { imm: 1400, dst: slot(1) },
-                PredOp::CmpGt { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                PredOp::LoadEventField {
+                    binding: BindingIdx(0),
+                    field: FieldIdx(0),
+                    dst: slot(0),
+                },
+                PredOp::LoadConst {
+                    imm: 1400,
+                    dst: slot(1),
+                },
+                PredOp::CmpGt {
+                    lhs: slot(0),
+                    rhs: slot(1),
+                    dst: slot(2),
+                },
             ]),
             result: slot(2),
         };
-        let big = [Binding::Bound(Bound::Event(event(vec![(FieldIdx(0), 1500)])))];
-        let small = [Binding::Bound(Bound::Event(event(vec![(FieldIdx(0), 1200)])))];
+        let big = [Binding::Bound(Bound::Event(event(vec![(
+            FieldIdx(0),
+            1500,
+        )])))];
+        let small = [Binding::Bound(Bound::Event(event(vec![(
+            FieldIdx(0),
+            1200,
+        )])))];
         assert_eq!(run_pred(&gt_1400, &big), Ok(T3::True));
         assert_eq!(run_pred(&gt_1400, &small), Ok(T3::False));
         // Missing optional field (04 §1) → Unknown, not an error.
@@ -406,11 +490,29 @@ mod tests {
         // False — equivalent to never evaluating the RHS.
         let guarded = Predicate {
             ops: Box::new([
-                PredOp::Present { binding: BindingIdx(0), dst: slot(0) },
-                PredOp::LoadEventField { binding: BindingIdx(0), field: FieldIdx(0), dst: slot(1) },
-                PredOp::LoadConst { imm: 1, dst: slot(2) },
-                PredOp::CmpEq { lhs: slot(1), rhs: slot(2), dst: slot(3) },
-                PredOp::And { lhs: slot(0), rhs: slot(3), dst: slot(4) },
+                PredOp::Present {
+                    binding: BindingIdx(0),
+                    dst: slot(0),
+                },
+                PredOp::LoadEventField {
+                    binding: BindingIdx(0),
+                    field: FieldIdx(0),
+                    dst: slot(1),
+                },
+                PredOp::LoadConst {
+                    imm: 1,
+                    dst: slot(2),
+                },
+                PredOp::CmpEq {
+                    lhs: slot(1),
+                    rhs: slot(2),
+                    dst: slot(3),
+                },
+                PredOp::And {
+                    lhs: slot(0),
+                    rhs: slot(3),
+                    dst: slot(4),
+                },
             ]),
             result: slot(4),
         };
@@ -425,11 +527,17 @@ mod tests {
         // 03 §3.2: present/absent over the binding state; Unknown is
         // neither (C10).
         let present = Predicate {
-            ops: Box::new([PredOp::Present { binding: BindingIdx(0), dst: slot(0) }]),
+            ops: Box::new([PredOp::Present {
+                binding: BindingIdx(0),
+                dst: slot(0),
+            }]),
             result: slot(0),
         };
         let absent = Predicate {
-            ops: Box::new([PredOp::Absent { binding: BindingIdx(0), dst: slot(0) }]),
+            ops: Box::new([PredOp::Absent {
+                binding: BindingIdx(0),
+                dst: slot(0),
+            }]),
             result: slot(0),
         };
         let bound = [Binding::Bound(Bound::Event(event(vec![])))];
@@ -440,7 +548,10 @@ mod tests {
         assert_eq!(run_pred(&present, &[Binding::Unknown]), Ok(T3::Unknown));
         assert_eq!(run_pred(&absent, &[Binding::Unknown]), Ok(T3::Unknown));
         // Out-of-range binding index is an error value, not a panic.
-        assert_eq!(run_pred(&present, &[]), Err(CorrelateError::UnknownBinding { binding: 0 }));
+        assert_eq!(
+            run_pred(&present, &[]),
+            Err(CorrelateError::UnknownBinding { binding: 0 })
+        );
     }
 
     #[test]
@@ -448,10 +559,24 @@ mod tests {
         // D4 / 06 §4: WIN_IN inclusive at both boundaries.
         let win = |x: i64| Predicate {
             ops: Box::new([
-                PredOp::LoadConst { imm: x, dst: slot(0) },
-                PredOp::LoadConst { imm: 100, dst: slot(1) },
-                PredOp::LoadConst { imm: 200, dst: slot(2) },
-                PredOp::WinIn { x: slot(0), lo: slot(1), hi: slot(2), dst: slot(3) },
+                PredOp::LoadConst {
+                    imm: x,
+                    dst: slot(0),
+                },
+                PredOp::LoadConst {
+                    imm: 100,
+                    dst: slot(1),
+                },
+                PredOp::LoadConst {
+                    imm: 200,
+                    dst: slot(2),
+                },
+                PredOp::WinIn {
+                    x: slot(0),
+                    lo: slot(1),
+                    hi: slot(2),
+                    dst: slot(3),
+                },
             ]),
             result: slot(3),
         };

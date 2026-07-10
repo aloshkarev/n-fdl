@@ -31,7 +31,11 @@ impl RingBuffer {
     /// `07` §9).
     #[must_use]
     pub fn new(scope: ScopeId, capacity: usize) -> RingBuffer {
-        RingBuffer { buf: VecDeque::new(), scope, capacity: capacity.max(1) }
+        RingBuffer {
+            buf: VecDeque::new(),
+            scope,
+            capacity: capacity.max(1),
+        }
     }
 
     /// The partition this ring buffers events for.
@@ -72,11 +76,13 @@ impl RingBuffer {
     pub fn push(&mut self, event: EventNode) -> Option<StoreDiagnostic> {
         let spill = if self.buf.len() == self.capacity {
             // Drop oldest (lowest time — front, by the sort invariant).
-            self.buf.pop_front().map(|dropped| StoreDiagnostic::RingBufferSpill {
-                scope: self.scope,
-                dropped: dropped.id,
-                capacity: self.capacity,
-            })
+            self.buf
+                .pop_front()
+                .map(|dropped| StoreDiagnostic::RingBufferSpill {
+                    scope: self.scope,
+                    dropped: dropped.id,
+                    capacity: self.capacity,
+                })
         } else {
             None
         };
@@ -101,7 +107,10 @@ impl RingBuffer {
         let lo = anchor.sub(back);
         let hi = anchor.add(fwd);
         let start = self.buf.partition_point(|e| e.time < lo);
-        self.buf.iter().skip(start).take_while(move |e| e.time <= hi)
+        self.buf
+            .iter()
+            .skip(start)
+            .take_while(move |e| e.time <= hi)
     }
 
     /// Looks up a buffered event by id (the `PendingMatch.anchor_event`

@@ -1,10 +1,11 @@
 [package]
 name = "airpulse_dsl-verify"
 version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
+# concrete values (matching workspace.package) for cross-workspace path-dep use
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Aleksandr Loshkarev <mailbox@aloshkarev.com>"]
 
 [lib]
 name = "airpulse_dsl_verify"
@@ -16,7 +17,7 @@ airpulse_dsl-types = { path = "../airpulse_dsl-types" }
 airpulse_dsl-ir = { path = "../airpulse_dsl-ir" }
 airpulse_dsl-catalog = { path = "../airpulse_dsl-catalog" }
 ndsl-diag = { path = "../ndsl-diag" }
-ariadne = { workspace = true }
+ariadne = "0.4"
 
 [dev-dependencies]
 airpulse_dsl-evaluator = { path = "../airpulse_dsl-evaluator" }

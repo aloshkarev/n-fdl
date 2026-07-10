@@ -33,7 +33,11 @@ impl WaitQueue {
     /// clamped to 1 so `push` stays total.
     #[must_use]
     pub fn new(scope: ScopeId, capacity: usize) -> WaitQueue {
-        WaitQueue { heap: BinaryHeap::new(), scope, capacity: capacity.max(1) }
+        WaitQueue {
+            heap: BinaryHeap::new(),
+            scope,
+            capacity: capacity.max(1),
+        }
     }
 
     /// The partition this queue belongs to.
@@ -73,8 +77,7 @@ impl WaitQueue {
         // Find the least urgent entry currently held. BinaryHeap has no
         // O(log n) max-removal for a min-heap; capacity overflow is the
         // rare degraded path (ADR-011), so an O(n) scan is acceptable.
-        let current_max =
-            self.heap.iter().map(|Reverse(p)| p).max().cloned();
+        let current_max = self.heap.iter().map(|Reverse(p)| p).max().cloned();
         match current_max {
             Some(max) if pending < max => {
                 // The new entry is more urgent: evict the stored maximum.

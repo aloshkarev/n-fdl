@@ -7,10 +7,18 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+mod causes;
+mod events;
+mod helpers;
+mod problems;
+mod wifi;
+
 use std::sync::LazyLock;
 
 use airpulse_dsl_ir::{CatalogRef, FieldIdx, TopoFuncIdx};
-use airpulse_dsl_types::{ActionKind, Capability, CauseKind, EventType, ProblemKind, SarifId, ScopeType, Severity};
+use airpulse_dsl_types::{
+    ActionKind, Capability, CauseKind, EventType, ProblemKind, SarifId, ScopeType, Severity,
+};
 
 /// Stable catalog id used by `ProgramImage.catalog_ref.id`
 /// (`06-ir-bytecode.md` §2 catalog_ref).
@@ -18,7 +26,7 @@ pub const CATALOG_ID: &str = "airpulse.catalog";
 
 /// Stable catalog version used by `ProgramImage.catalog_ref.version`
 /// (`06-ir-bytecode.md` §2 catalog_ref).
-pub const CATALOG_VERSION: &str = "1.0";
+pub const CATALOG_VERSION: &str = "1.3";
 
 /// Field type carried by the catalog (`04-type-system.md` §1/§6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -184,376 +192,14 @@ pub enum EventOrBindingType<'a> {
     Problem(&'a ProblemKind),
 }
 
-fn idx(n: u16) -> FieldIdx {
-    FieldIdx(n)
-}
+static EVENTS: LazyLock<Box<[EventSchema]>> = LazyLock::new(events::all_events);
 
-fn event(name: &'static str, fields: &[FieldSchema], routes: &[ScopeRoute]) -> EventSchema {
-    EventSchema {
-        name,
-        event_type: EventType::new(name),
-        fields: fields.to_vec().into_boxed_slice(),
-        routing_paths: routes.to_vec().into_boxed_slice(),
-    }
-}
+static CAUSES: LazyLock<Box<[CauseSchema]>> = LazyLock::new(causes::all_causes);
 
-fn cause(name: &'static str, scopes: &[ScopeType], default_severity: Option<Severity>) -> CauseSchema {
-    CauseSchema {
-        name,
-        kind: CauseKind::new(name),
-        valid_scopes: scopes.to_vec().into_boxed_slice(),
-        default_severity,
-    }
-}
-
-fn problem(
-    name: &'static str,
-    scopes: &[ScopeType],
-    sarif_id: &'static str,
-    severity: Option<Severity>,
-) -> ProblemSchema {
-    ProblemSchema {
-        name,
-        kind: ProblemKind::new(name),
-        valid_scopes: scopes.to_vec().into_boxed_slice(),
-        default_sarif_id: SarifId::new(sarif_id),
-        severity,
-    }
-}
-
-static EVENTS: LazyLock<Box<[EventSchema]>> = LazyLock::new(|| {
-    Box::new([
-        // 10-catalog-abi.md §2 `tcp.retransmission_burst`.
-        event(
-            "tcp.retransmission_burst",
-            &[
-                FieldSchema { name: "segment_size", field_type: FieldType::Int, pii: false, idx: idx(0) },
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Session),
-                    pii: false,
-                    idx: idx(1),
-                },
-                // Inference: `time` is untyped in §2 event listings, but 04 §2/§6
-                // models event-time as `Int` milliseconds.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(2) },
-                FieldSchema {
-                    name: "vlan",
-                    field_type: FieldType::ScopeId(ScopeType::Vlan),
-                    pii: false,
-                    idx: idx(3),
-                },
-                FieldSchema { name: "path", field_type: FieldType::ScopeIdList, pii: false, idx: idx(4) },
-                FieldSchema { name: "dst_ip", field_type: FieldType::Int, pii: true, idx: idx(5) },
-                FieldSchema { name: "src_ip", field_type: FieldType::Int, pii: true, idx: idx(6) },
-            ],
-            &[
-                ScopeRoute { scope: ScopeType::Session, path: "target" },
-                ScopeRoute { scope: ScopeType::Vlan, path: "vlan" },
-                ScopeRoute { scope: ScopeType::Vlan, path: "path" },
-            ],
-        ),
-        // 10-catalog-abi.md §2 `icmp.ptb`.
-        event(
-            "icmp.ptb",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Session),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "quoted_mtu", field_type: FieldType::Int, pii: false, idx: idx(2) },
-                FieldSchema { name: "path", field_type: FieldType::ScopeIdList, pii: false, idx: idx(3) },
-                FieldSchema { name: "dst_ip", field_type: FieldType::Int, pii: true, idx: idx(4) },
-            ],
-            &[ScopeRoute { scope: ScopeType::Session, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `wifi.deauth_burst`.
-        event(
-            "wifi.deauth_burst",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::AccessPoint),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "count", field_type: FieldType::Int, pii: false, idx: idx(2) },
-                // Inference: `bssid` is untyped in §2. 04 §2 has no MAC scalar, and
-                // examples treat AP ids as numeric identifiers, so store as `Int`.
-                FieldSchema { name: "bssid", field_type: FieldType::Int, pii: true, idx: idx(3) },
-                // Inference: `client_macs` is declared `List<Int>` in §2.
-                FieldSchema { name: "client_macs", field_type: FieldType::IntList, pii: true, idx: idx(4) },
-            ],
-            &[ScopeRoute { scope: ScopeType::AccessPoint, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `wifi.rf_telemetry`.
-        event(
-            "wifi.rf_telemetry",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::AccessPoint),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "rssi", field_type: FieldType::Int, pii: false, idx: idx(2) },
-                FieldSchema { name: "noise", field_type: FieldType::Int, pii: false, idx: idx(3) },
-                FieldSchema { name: "channel", field_type: FieldType::Int, pii: false, idx: idx(4) },
-            ],
-            &[ScopeRoute { scope: ScopeType::AccessPoint, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `stp.topology_change`.
-        event(
-            "stp.topology_change",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Vlan),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema {
-                    name: "vlan",
-                    field_type: FieldType::ScopeId(ScopeType::Vlan),
-                    pii: false,
-                    idx: idx(2),
-                },
-            ],
-            &[ScopeRoute { scope: ScopeType::Vlan, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `dhcp.timeout`.
-        event(
-            "dhcp.timeout",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::ClientMac),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema {
-                    name: "vlan",
-                    field_type: FieldType::ScopeId(ScopeType::Vlan),
-                    pii: false,
-                    idx: idx(2),
-                },
-                // Inference: `client_mac` is untyped in §2. 04 §2 lacks a dedicated
-                // MAC scalar, so represent identifiers as `Int`.
-                FieldSchema { name: "client_mac", field_type: FieldType::Int, pii: true, idx: idx(3) },
-            ],
-            &[
-                ScopeRoute { scope: ScopeType::ClientMac, path: "target" },
-                ScopeRoute { scope: ScopeType::Vlan, path: "vlan" },
-            ],
-        ),
-        // 10-catalog-abi.md §2 `radius.access_request`.
-        event(
-            "radius.access_request",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::ClientMac),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema {
-                    name: "vlan",
-                    field_type: FieldType::ScopeId(ScopeType::Vlan),
-                    pii: false,
-                    idx: idx(2),
-                },
-            ],
-            &[
-                ScopeRoute { scope: ScopeType::ClientMac, path: "target" },
-                ScopeRoute { scope: ScopeType::Vlan, path: "vlan" },
-            ],
-        ),
-        // 10-catalog-abi.md §2 `dot1x.eapol_start`.
-        event(
-            "dot1x.eapol_start",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::ClientMac),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema {
-                    name: "vlan",
-                    field_type: FieldType::ScopeId(ScopeType::Vlan),
-                    pii: false,
-                    idx: idx(2),
-                },
-            ],
-            &[
-                ScopeRoute { scope: ScopeType::ClientMac, path: "target" },
-                ScopeRoute { scope: ScopeType::Vlan, path: "vlan" },
-            ],
-        ),
-        // 10-catalog-abi.md §2 `port.crc_errors`.
-        event(
-            "port.crc_errors",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Port),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "count", field_type: FieldType::Int, pii: false, idx: idx(2) },
-            ],
-            &[ScopeRoute { scope: ScopeType::Port, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `port.link_flap`.
-        event(
-            "port.link_flap",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Port),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "count", field_type: FieldType::Int, pii: false, idx: idx(2) },
-            ],
-            &[ScopeRoute { scope: ScopeType::Port, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `port.admin_state`.
-        event(
-            "port.admin_state",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Port),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "state", field_type: FieldType::String, pii: false, idx: idx(2) },
-            ],
-            &[ScopeRoute { scope: ScopeType::Port, path: "target" }],
-        ),
-        // 10-catalog-abi.md §2 `port.oper_state`.
-        event(
-            "port.oper_state",
-            &[
-                FieldSchema {
-                    name: "target",
-                    field_type: FieldType::ScopeId(ScopeType::Port),
-                    pii: false,
-                    idx: idx(0),
-                },
-                // Inference: `time` is untyped in §2 event listings; modelled as
-                // `Int` event-time in 04 §2/§6.
-                FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: idx(1) },
-                FieldSchema { name: "state", field_type: FieldType::String, pii: false, idx: idx(2) },
-            ],
-            &[ScopeRoute { scope: ScopeType::Port, path: "target" }],
-        ),
-    ])
-});
-
-static CAUSES: LazyLock<Box<[CauseSchema]>> = LazyLock::new(|| {
-    Box::new([
-        // 10-catalog-abi.md §3 `PmtudBlackhole`.
-        cause("PmtudBlackhole", &[ScopeType::Session, ScopeType::Vlan], None),
-        // 10-catalog-abi.md §3 `Congestion`.
-        cause("Congestion", &[ScopeType::Session], None),
-        // 10-catalog-abi.md §3 `TransientL2Disruption`.
-        cause("TransientL2Disruption", &[ScopeType::Session, ScopeType::Vlan], None),
-        // 10-catalog-abi.md §3 `PhysicalCableDamage`.
-        cause("PhysicalCableDamage", &[ScopeType::Port], None),
-        // 10-catalog-abi.md §3 `AuthServerOutage`.
-        cause("AuthServerOutage", &[ScopeType::Vlan], None),
-        // 10-catalog-abi.md §3 `RfInterference`.
-        cause("RfInterference", &[ScopeType::AccessPoint], None),
-        // 10-catalog-abi.md §3 `UpstreamOutage`.
-        cause("UpstreamOutage", &[ScopeType::Global], None),
-        // 10-catalog-abi.md §3 `PhysicalLinkAbsent`.
-        cause("PhysicalLinkAbsent", &[ScopeType::Port], None),
-    ])
-});
-
-static PROBLEMS: LazyLock<Box<[ProblemSchema]>> = LazyLock::new(|| {
-    Box::new([
-        // 10-catalog-abi.md §4 `XlIcmpTcpMss`.
-        problem("XlIcmpTcpMss", &[ScopeType::Session], "l3_pmtud_blackhole", None),
-        // 10-catalog-abi.md §4 `CableDisconnected`.
-        problem(
-            "CableDisconnected",
-            &[ScopeType::Port],
-            "ap_port_cable_disconnected",
-            None,
-        ),
-        // 10-catalog-abi.md §4 `SpanningTreeInstability`.
-        problem(
-            "SpanningTreeInstability",
-            &[ScopeType::Vlan],
-            "l3_stp_spanning_tree",
-            None,
-        ),
-        // 10-catalog-abi.md §4 `ClientOnboardingFailure`.
-        problem(
-            "ClientOnboardingFailure",
-            &[ScopeType::Vlan],
-            "l3_dot1x_wired",
-            None,
-        ),
-        // 10-catalog-abi.md §4 `WlanRadiusOutage`.
-        problem("WlanRadiusOutage", &[ScopeType::Vlan], "ap_wlan_radius_outage", None),
-        // 10-catalog-abi.md §4 `DeviceUnreachable`.
-        problem("DeviceUnreachable", &[ScopeType::Global], "ap_device_unreachable", None),
-        // 10-catalog-abi.md §4 `AmbiguousDiagnosis`.
-        problem(
-            "AmbiguousDiagnosis",
-            &[
-                ScopeType::Session,
-                ScopeType::Port,
-                ScopeType::ClientMac,
-                ScopeType::Vlan,
-                ScopeType::AccessPoint,
-                ScopeType::Global,
-            ],
-            "ap_ambiguous",
-            Some(Severity::Medium),
-        ),
-    ])
-});
+static PROBLEMS: LazyLock<Box<[ProblemSchema]>> = LazyLock::new(problems::all_problems);
 
 static ACTIONS: LazyLock<Box<[ActionSchema]>> = LazyLock::new(|| {
     Box::new([
-        // 10-catalog-abi.md §5 `request_observation`.
         ActionSchema {
             kind: ActionKind::RequestObservation,
             name: "request_observation",
@@ -562,7 +208,6 @@ static ACTIONS: LazyLock<Box<[ActionSchema]>> = LazyLock::new(|| {
                 .into_boxed_slice(),
             allowed_kinds: OBSERVATION_KINDS.to_vec().into_boxed_slice(),
         },
-        // 10-catalog-abi.md §5 `run_check`.
         ActionSchema {
             kind: ActionKind::RunCheck,
             name: "run_check",
@@ -570,7 +215,6 @@ static ACTIONS: LazyLock<Box<[ActionSchema]>> = LazyLock::new(|| {
             target_types: vec![ActionTargetType::ScopeId].into_boxed_slice(),
             allowed_kinds: CHECK_KINDS.to_vec().into_boxed_slice(),
         },
-        // 10-catalog-abi.md §5 `suppress_symptom`.
         ActionSchema {
             kind: ActionKind::SuppressSymptom,
             name: "suppress_symptom",
@@ -578,7 +222,6 @@ static ACTIONS: LazyLock<Box<[ActionSchema]>> = LazyLock::new(|| {
             target_types: Box::new([]),
             allowed_kinds: Box::new([]),
         },
-        // 10-catalog-abi.md §5 `mark_ambiguous`.
         ActionSchema {
             kind: ActionKind::MarkAmbiguous,
             name: "mark_ambiguous",
@@ -586,7 +229,6 @@ static ACTIONS: LazyLock<Box<[ActionSchema]>> = LazyLock::new(|| {
             target_types: vec![ActionTargetType::ScopeId].into_boxed_slice(),
             allowed_kinds: Box::new([]),
         },
-        // 10-catalog-abi.md §5 `request_topology`.
         ActionSchema {
             kind: ActionKind::RequestTopology,
             name: "request_topology",
@@ -599,42 +241,36 @@ static ACTIONS: LazyLock<Box<[ActionSchema]>> = LazyLock::new(|| {
 
 static TOPO_FUNCTIONS: LazyLock<Box<[TopoFnSchema]>> = LazyLock::new(|| {
     Box::new([
-        // 10-catalog-abi.md §6 `same_session`.
         TopoFnSchema {
             name: "same_session",
             func_idx: TopoFuncIdx(0),
             arity: 2,
             arg_types: vec![TopoArgType::ScopeId, TopoArgType::ScopeId].into_boxed_slice(),
         },
-        // 10-catalog-abi.md §6 `same_client`.
         TopoFnSchema {
             name: "same_client",
             func_idx: TopoFuncIdx(1),
             arity: 2,
             arg_types: vec![TopoArgType::ScopeId, TopoArgType::ScopeId].into_boxed_slice(),
         },
-        // 10-catalog-abi.md §6 `same_port`.
         TopoFnSchema {
             name: "same_port",
             func_idx: TopoFuncIdx(2),
             arity: 2,
             arg_types: vec![TopoArgType::ScopeId, TopoArgType::ScopeId].into_boxed_slice(),
         },
-        // 10-catalog-abi.md §6 `same_ap`.
         TopoFnSchema {
             name: "same_ap",
             func_idx: TopoFuncIdx(3),
             arity: 2,
             arg_types: vec![TopoArgType::ScopeId, TopoArgType::ScopeId].into_boxed_slice(),
         },
-        // 10-catalog-abi.md §6 `same_vlan`.
         TopoFnSchema {
             name: "same_vlan",
             func_idx: TopoFuncIdx(4),
             arity: 2,
             arg_types: vec![TopoArgType::ScopeId, TopoArgType::ScopeId].into_boxed_slice(),
         },
-        // 10-catalog-abi.md §6 `upstream_of`.
         TopoFnSchema {
             name: "upstream_of",
             func_idx: TopoFuncIdx(5),
@@ -646,13 +282,9 @@ static TOPO_FUNCTIONS: LazyLock<Box<[TopoFnSchema]>> = LazyLock::new(|| {
 
 static CAPABILITIES: LazyLock<Box<[Capability]>> = LazyLock::new(|| {
     Box::new([
-        // 10-catalog-abi.md §8
         Capability::new("l3-deep"),
-        // 10-catalog-abi.md §8
         Capability::new("topology"),
-        // 10-catalog-abi.md §8
         Capability::new("wifi-ota"),
-        // 10-catalog-abi.md §8
         Capability::new("radio-nemo"),
     ])
 });
@@ -665,25 +297,42 @@ static CHECK_KINDS: [&str; 3] = ["cable_loopback", "lldp_poll", "stp_root_check"
 
 static EXCLUSIVITY_DEFAULTS: LazyLock<Box<[ExclusivityPair]>> = LazyLock::new(|| {
     Box::new([
-        // 10-catalog-abi.md §7 pair 1.
-        ExclusivityPair { left: CauseKind::new("Congestion"), right: CauseKind::new("PmtudBlackhole") },
-        // 10-catalog-abi.md §7 pair 2.
+        ExclusivityPair {
+            left: CauseKind::new("Congestion"),
+            right: CauseKind::new("PmtudBlackhole"),
+        },
         ExclusivityPair {
             left: CauseKind::new("Congestion"),
             right: CauseKind::new("TransientL2Disruption"),
         },
-        // 10-catalog-abi.md §7 pair 3.
         ExclusivityPair {
             left: CauseKind::new("PmtudBlackhole"),
             right: CauseKind::new("TransientL2Disruption"),
         },
-        // 10-catalog-abi.md §7 pair 4.
         ExclusivityPair {
             left: CauseKind::new("PhysicalCableDamage"),
             right: CauseKind::new("PhysicalLinkAbsent"),
         },
-        // 10-catalog-abi.md §7 pair 5.
-        ExclusivityPair { left: CauseKind::new("AuthServerOutage"), right: CauseKind::new("RfInterference") },
+        ExclusivityPair {
+            left: CauseKind::new("AuthServerOutage"),
+            right: CauseKind::new("RfInterference"),
+        },
+        ExclusivityPair {
+            left: CauseKind::new("PacketLossPath"),
+            right: CauseKind::new("SpuriousRetransmission"),
+        },
+        ExclusivityPair {
+            left: CauseKind::new("PacketLossPath"),
+            right: CauseKind::new("RadioChannelDegradation"),
+        },
+        ExclusivityPair {
+            left: CauseKind::new("BufferbloatQueue"),
+            right: CauseKind::new("MiddleboxInterference"),
+        },
+        ExclusivityPair {
+            left: CauseKind::new("PmtudPathIssue"),
+            right: CauseKind::new("PacketLossPath"),
+        },
     ])
 });
 
@@ -699,10 +348,43 @@ pub const PROBLEM_FIELD_TARGET: FieldIdx = FieldIdx(0);
 /// `p.time` field index in the catalog Problem schema (`04` §6.2).
 pub const PROBLEM_FIELD_TIME: FieldIdx = FieldIdx(1);
 
+/// Returns the canonical W0 Wi-Fi mapping table (83 rows).
+#[must_use]
+pub fn wifi_w0_mappings() -> &'static [wifi::WifiMapping] {
+    wifi::WIFI_MAPPINGS
+}
+
 /// Returns the static `CatalogRef` for ADGL `ProgramImage`.
 #[must_use]
 pub fn catalog_ref() -> CatalogRef {
-    CatalogRef { id: CATALOG_ID.into(), version: CATALOG_VERSION.into() }
+    CatalogRef {
+        id: CATALOG_ID.into(),
+        version: CATALOG_VERSION.into(),
+    }
+}
+
+/// Returns all catalog event schemas in declaration order.
+#[must_use]
+pub fn events() -> &'static [EventSchema] {
+    EVENTS.as_ref()
+}
+
+/// Returns the number of catalog events.
+#[must_use]
+pub fn event_count() -> usize {
+    EVENTS.len()
+}
+
+/// Returns the number of catalog causes.
+#[must_use]
+pub fn cause_count() -> usize {
+    CAUSES.len()
+}
+
+/// Returns the number of catalog problems.
+#[must_use]
+pub fn problem_count() -> usize {
+    PROBLEMS.len()
 }
 
 /// Resolve an event schema by catalog name (`10-catalog-abi.md` §2).
@@ -721,6 +403,14 @@ pub fn resolve_cause(name: &str) -> Option<&'static CauseSchema> {
 #[must_use]
 pub fn resolve_problem(name: &str) -> Option<&'static ProblemSchema> {
     PROBLEMS.iter().find(|schema| schema.name == name)
+}
+
+/// Resolve a problem schema by default SARIF id (`10-catalog-abi.md` §4).
+#[must_use]
+pub fn resolve_problem_by_sarif(sarif_id: &str) -> Option<&'static ProblemSchema> {
+    PROBLEMS
+        .iter()
+        .find(|schema| schema.default_sarif_id.as_str() == sarif_id)
 }
 
 /// Resolve an action schema by DSL keyword (`10-catalog-abi.md` §5).
@@ -778,15 +468,11 @@ pub fn resolve_metric_path(
     let fields: &[FieldSchema] = match event_or_binding_type {
         EventOrBindingType::Event(event) => resolve_event(event.as_str())?.fields.as_ref(),
         EventOrBindingType::Cause(cause) => {
-            if resolve_cause(cause.as_str()).is_none() {
-                return None;
-            }
+            resolve_cause(cause.as_str())?;
             &CAUSE_FIELDS
         }
         EventOrBindingType::Problem(problem) => {
-            if resolve_problem(problem.as_str()).is_none() {
-                return None;
-            }
+            resolve_problem(problem.as_str())?;
             &PROBLEM_FIELDS
         }
     };
@@ -804,15 +490,24 @@ static CAUSE_FIELDS: [FieldSchema; 4] = [
         pii: false,
         idx: CAUSE_FIELD_TARGET,
     },
-    // Inference: cause `time` is modelled as `Int` in 04 §6.2.
-    FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: CAUSE_FIELD_TIME },
+    FieldSchema {
+        name: "time",
+        field_type: FieldType::Int,
+        pii: false,
+        idx: CAUSE_FIELD_TIME,
+    },
     FieldSchema {
         name: "confidence",
         field_type: FieldType::Confidence,
         pii: false,
         idx: CAUSE_FIELD_CONFIDENCE,
     },
-    FieldSchema { name: "evidence", field_type: FieldType::NodeIdList, pii: false, idx: FieldIdx(3) },
+    FieldSchema {
+        name: "evidence",
+        field_type: FieldType::NodeIdList,
+        pii: false,
+        idx: FieldIdx(3),
+    },
 ];
 
 // 04-type-system.md §6.2 Problem schema.
@@ -823,14 +518,28 @@ static PROBLEM_FIELDS: [FieldSchema; 5] = [
         pii: false,
         idx: PROBLEM_FIELD_TARGET,
     },
-    // Inference: problem `time` is modelled as `Int` in 04 §6.2.
-    FieldSchema { name: "time", field_type: FieldType::Int, pii: false, idx: PROBLEM_FIELD_TIME },
+    FieldSchema {
+        name: "time",
+        field_type: FieldType::Int,
+        pii: false,
+        idx: PROBLEM_FIELD_TIME,
+    },
     FieldSchema {
         name: "severity",
         field_type: FieldType::Severity,
         pii: false,
         idx: FieldIdx(2),
     },
-    FieldSchema { name: "evidence", field_type: FieldType::NodeIdList, pii: false, idx: FieldIdx(3) },
-    FieldSchema { name: "sarif_id", field_type: FieldType::SarifId, pii: false, idx: FieldIdx(4) },
+    FieldSchema {
+        name: "evidence",
+        field_type: FieldType::NodeIdList,
+        pii: false,
+        idx: FieldIdx(3),
+    },
+    FieldSchema {
+        name: "sarif_id",
+        field_type: FieldType::SarifId,
+        pii: false,
+        idx: FieldIdx(4),
+    },
 ];

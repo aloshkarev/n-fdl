@@ -105,7 +105,10 @@ pub fn root_message_name(proto: &Protocol) -> String {
 
 /// Recursive helper: collect `MessageRef` target names from a `match` and its
 /// arms (mirrors `integration::collect_match_refs`).
-fn collect_match_refs_name(m: &nfdl_syntax::ast::Match, out: &mut std::collections::HashSet<String>) {
+fn collect_match_refs_name(
+    m: &nfdl_syntax::ast::Match,
+    out: &mut std::collections::HashSet<String>,
+) {
     for arm in &m.arms {
         for f in &arm.fields {
             if let nfdl_syntax::ast::NfdlType::MessageRef(r) = &f.ty {

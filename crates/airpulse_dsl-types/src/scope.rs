@@ -108,7 +108,10 @@ pub type SessionEndpoint = (u128, u16);
 impl ScopeId {
     /// The singleton `Global` partition key: `ScopeId(GLOBAL, ())`
     /// (`09-scopes-sessions.md` §6; `04` §5 "Global — singleton partition").
-    pub const GLOBAL: ScopeId = ScopeId { scope_type: ScopeType::Global, key: 0 };
+    pub const GLOBAL: ScopeId = ScopeId {
+        scope_type: ScopeType::Global,
+        key: 0,
+    };
 
     /// `Session = bidir_tuple((ip, port), (ip, port))` (`09` §7): the two
     /// endpoints are sorted *atomically* (IP and port together, mirroring
@@ -121,7 +124,10 @@ impl ScopeId {
         h = fnv1a_u64(h, lo.1 as u64);
         h = fnv1a_u128(h, hi.0);
         h = fnv1a_u64(h, hi.1 as u64);
-        ScopeId { scope_type: ScopeType::Session, key: h }
+        ScopeId {
+            scope_type: ScopeType::Session,
+            key: h,
+        }
     }
 
     /// `Port = (switch_id, port_id)` (`09` §7).
@@ -130,25 +136,37 @@ impl ScopeId {
         let mut h = FNV_OFFSET;
         h = fnv1a_u64(h, switch_id);
         h = fnv1a_u64(h, port_id as u64);
-        ScopeId { scope_type: ScopeType::Port, key: h }
+        ScopeId {
+            scope_type: ScopeType::Port,
+            key: h,
+        }
     }
 
     /// `ClientMac = client_mac` (`09` §7). The MAC's 48 bits in the low bytes.
     #[must_use]
     pub fn client_mac(mac: u64) -> ScopeId {
-        ScopeId { scope_type: ScopeType::ClientMac, key: fnv1a_u64(FNV_OFFSET, mac) }
+        ScopeId {
+            scope_type: ScopeType::ClientMac,
+            key: fnv1a_u64(FNV_OFFSET, mac),
+        }
     }
 
     /// `Vlan = vlan_id` (`09` §7).
     #[must_use]
     pub fn vlan(vlan_id: u16) -> ScopeId {
-        ScopeId { scope_type: ScopeType::Vlan, key: fnv1a_u64(FNV_OFFSET, vlan_id as u64) }
+        ScopeId {
+            scope_type: ScopeType::Vlan,
+            key: fnv1a_u64(FNV_OFFSET, vlan_id as u64),
+        }
     }
 
     /// `AccessPoint = bssid` (`09` §7). The BSSID's 48 bits in the low bytes.
     #[must_use]
     pub fn access_point(bssid: u64) -> ScopeId {
-        ScopeId { scope_type: ScopeType::AccessPoint, key: fnv1a_u64(FNV_OFFSET, bssid) }
+        ScopeId {
+            scope_type: ScopeType::AccessPoint,
+            key: fnv1a_u64(FNV_OFFSET, bssid),
+        }
     }
 
     /// The scope (partition) type of this key.
@@ -279,7 +297,10 @@ mod tests {
         assert_ne!(ScopeId::port(1, 2), ScopeId::port(2, 1));
         // Same numeric key under different scope types must not compare equal.
         assert_ne!(ScopeId::client_mac(42), ScopeId::access_point(42));
-        assert_ne!(ScopeId::client_mac(42).hash_key(), ScopeId::access_point(42).hash_key());
+        assert_ne!(
+            ScopeId::client_mac(42).hash_key(),
+            ScopeId::access_point(42).hash_key()
+        );
     }
 
     #[test]

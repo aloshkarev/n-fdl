@@ -5,6 +5,12 @@
 use airpulse_dsl_ir::FieldIdx;
 use airpulse_dsl_types::{EventId, EventTime, EventType, ScopeId};
 
+/// Maximum values carried by one event `IntList` field.
+///
+/// Input is sorted and deduplicated before this bound is applied, so truncation
+/// is deterministic and retains the lowest 64 encoded values.
+pub const MAX_EVENT_INT_LIST_VALUES: usize = 64;
+
 /// Provenance basics for an event — where in the capture/stream it came from
 /// (the `span` component of `04` §3 `EventNode`; used for SARIF evidence
 /// locations and late-event audit, `08` §4).
@@ -40,6 +46,9 @@ pub struct EventNode {
     pub scope: ScopeId,
     /// Metric fields, sorted by `FieldIdx` (see type-level docs).
     fields: Box<[(FieldIdx, i64)]>,
+    /// Bounded typed `IntList` sidecar, sorted by field index. Scalar
+    /// predicates continue to address only [`Self::fields`].
+    int_list_fields: Box<[(FieldIdx, Box<[i64]>)]>,
     /// Capture provenance (`04` §3 `span`).
     pub provenance: EventProvenance,
 }
@@ -58,7 +67,34 @@ impl EventNode {
     ) -> EventNode {
         fields.sort_by_key(|(idx, _)| *idx);
         fields.dedup_by_key(|(idx, _)| *idx);
-        EventNode { id, event_type, time, scope, fields: fields.into_boxed_slice(), provenance }
+        EventNode {
+            id,
+            event_type,
+            time,
+            scope,
+            fields: fields.into_boxed_slice(),
+            int_list_fields: Box::new([]),
+            provenance,
+        }
+    }
+
+    /// Adds or replaces one bounded `IntList` field.
+    ///
+    /// Values are sorted, deduplicated, and deterministically truncated to
+    /// [`MAX_EVENT_INT_LIST_VALUES`].
+    #[must_use]
+    pub fn with_int_list_field(mut self, idx: FieldIdx, mut values: Vec<i64>) -> EventNode {
+        values.sort_unstable();
+        values.dedup();
+        values.truncate(MAX_EVENT_INT_LIST_VALUES);
+
+        let mut fields = self.int_list_fields.into_vec();
+        match fields.binary_search_by_key(&idx, |(field_idx, _)| *field_idx) {
+            Ok(position) => fields[position] = (idx, values.into_boxed_slice()),
+            Err(position) => fields.insert(position, (idx, values.into_boxed_slice())),
+        }
+        self.int_list_fields = fields.into_boxed_slice();
+        self
     }
 
     /// Field lookup by catalog index — the store-side counterpart of
@@ -76,5 +112,21 @@ impl EventNode {
     #[must_use]
     pub fn fields(&self) -> &[(FieldIdx, i64)] {
         &self.fields
+    }
+
+    /// Typed-list field lookup. Numeric predicates intentionally do not use
+    /// this sidecar.
+    #[must_use]
+    pub fn int_list_field(&self, idx: FieldIdx) -> Option<&[i64]> {
+        self.int_list_fields
+            .binary_search_by_key(&idx, |(field_idx, _)| *field_idx)
+            .ok()
+            .map(|position| self.int_list_fields[position].1.as_ref())
+    }
+
+    /// All typed-list fields, sorted by field index.
+    #[must_use]
+    pub fn int_list_fields(&self) -> &[(FieldIdx, Box<[i64]>)] {
+        &self.int_list_fields
     }
 }

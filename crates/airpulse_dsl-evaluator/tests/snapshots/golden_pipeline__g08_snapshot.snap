@@ -71,6 +71,9 @@ Snapshot {
                     "Congestion",
                 ),
             ],
+            evidence_fields: {
+                "segment_size": "1501",
+            },
             superseded: false,
         },
     ],

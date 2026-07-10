@@ -47,7 +47,10 @@ ruleset "x" {
     let err = parse_ruleset(src).expect_err("emit in evidence must fail");
     let rendered = err.render(src, "emit_outside_rule.adgl");
     assert!(rendered.contains("ADGL0450"), "{rendered}");
-    assert!(rendered.contains("emit is not allowed in evidence rule body"), "{rendered}");
+    assert!(
+        rendered.contains("emit is not allowed in evidence rule body"),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -123,7 +126,10 @@ ruleset "x" {
     let err = parse_ruleset(src).expect_err("unsigned weight must fail");
     let rendered = err.render(src, "unsigned_weight.adgl");
     assert!(rendered.contains("ADGL0100"), "{rendered}");
-    assert!(rendered.contains("weight requires explicit sign"), "{rendered}");
+    assert!(
+        rendered.contains("weight requires explicit sign"),
+        "{rendered}"
+    );
 }
 
 #[test]

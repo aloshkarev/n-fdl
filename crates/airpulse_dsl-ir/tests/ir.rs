@@ -23,16 +23,30 @@ fn dur(ms: i64) -> DurationMs {
 }
 
 fn catalog_ref() -> CatalogRef {
-    CatalogRef { id: "airpulse.catalog".into(), version: "1.0".into() }
+    CatalogRef {
+        id: "airpulse.catalog".into(),
+        version: "1.0".into(),
+    }
 }
 
 /// `rtx.segment_size > 1400` (Example 01 anchor predicate; 06 §4.1 lowering).
 fn segment_size_gt_1400() -> Predicate {
     Predicate {
         ops: Box::new([
-            PredOp::LoadEventField { binding: BindingIdx(0), field: FieldIdx(0), dst: slot(0) },
-            PredOp::LoadConst { imm: 1400, dst: slot(1) },
-            PredOp::CmpGt { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+            PredOp::LoadEventField {
+                binding: BindingIdx(0),
+                field: FieldIdx(0),
+                dst: slot(0),
+            },
+            PredOp::LoadConst {
+                imm: 1400,
+                dst: slot(1),
+            },
+            PredOp::CmpGt {
+                lhs: slot(0),
+                rhs: slot(1),
+                dst: slot(2),
+            },
         ]),
         result: slot(2),
     }
@@ -51,7 +65,11 @@ fn pmtud_hypothesis() -> RuleInstance {
             args: Box::new([MetricPath::new("rtx.target"), MetricPath::new("ptb.target")]),
         },
         // time: ptb.time in [rtx.time - 500ms, rtx.time + 1s] (05 §11 Calculable)
-        window: WindowProof::Calculable { back: dur(500), forward: dur(1000) },
+        window: WindowProof::Calculable {
+            back: dur(500),
+            forward: dur(1000),
+        },
+        min_match: 1,
     }]);
     let prov = ProvKey {
         rule: RuleId::new("pmtud_hypothesis"),
@@ -61,7 +79,10 @@ fn pmtud_hypothesis() -> RuleInstance {
     let branches = BranchTable {
         // if present(ptb)
         cond: Predicate {
-            ops: Box::new([PredOp::Present { binding: BindingIdx(1), dst: slot(0) }]),
+            ops: Box::new([PredOp::Present {
+                binding: BindingIdx(1),
+                dst: slot(0),
+            }]),
             result: slot(0),
         },
         then_body: Box::new([Intent::InferCause {
@@ -132,8 +153,15 @@ fn pmtud_verdict() -> RuleInstance {
                         field: FieldIdx(0),
                         dst: slot(0),
                     },
-                    PredOp::LoadConst { imm: 80, dst: slot(1) },
-                    PredOp::CmpGe { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+                    PredOp::LoadConst {
+                        imm: 80,
+                        dst: slot(1),
+                    },
+                    PredOp::CmpGe {
+                        lhs: slot(0),
+                        rhs: slot(1),
+                        dst: slot(2),
+                    },
                 ]),
                 result: slot(2),
             },
@@ -178,7 +206,11 @@ fn rules_for_routes_by_anchor_and_class() {
     // Evidence lookup by event type (07 §5 img.rules_for(evt.type, sg, Evidence)).
     let evt = EventType::new("tcp.retransmission_burst");
     let hits: Vec<_> = img
-        .rules_for(AnchorKey::Event(&evt), ScopeType::Session, RuleKind::Evidence)
+        .rules_for(
+            AnchorKey::Event(&evt),
+            ScopeType::Session,
+            RuleKind::Evidence,
+        )
         .map(|r| r.id.as_str())
         .collect();
     assert_eq!(hits, ["pmtud_hypothesis"]);
@@ -186,16 +218,44 @@ fn rules_for_routes_by_anchor_and_class() {
     // Decision lookup by cause kind (03 §3.5 ConfidenceMutation re-eval).
     let cause = CauseKind::new("PmtudBlackhole");
     let hits: Vec<_> = img
-        .rules_for(AnchorKey::Cause(&cause), ScopeType::Session, RuleKind::Decision)
+        .rules_for(
+            AnchorKey::Cause(&cause),
+            ScopeType::Session,
+            RuleKind::Decision,
+        )
         .map(|r| r.id.as_str())
         .collect();
     assert_eq!(hits, ["pmtud_verdict"]);
 
     // Wrong class, wrong scope, unknown anchor — all route to nothing.
-    assert_eq!(img.rules_for(AnchorKey::Event(&evt), ScopeType::Session, RuleKind::Decision).count(), 0);
-    assert_eq!(img.rules_for(AnchorKey::Event(&evt), ScopeType::Global, RuleKind::Evidence).count(), 0);
+    assert_eq!(
+        img.rules_for(
+            AnchorKey::Event(&evt),
+            ScopeType::Session,
+            RuleKind::Decision
+        )
+        .count(),
+        0
+    );
+    assert_eq!(
+        img.rules_for(
+            AnchorKey::Event(&evt),
+            ScopeType::Global,
+            RuleKind::Evidence
+        )
+        .count(),
+        0
+    );
     let other = EventType::new("icmp.ptb");
-    assert_eq!(img.rules_for(AnchorKey::Event(&other), ScopeType::Session, RuleKind::Evidence).count(), 0);
+    assert_eq!(
+        img.rules_for(
+            AnchorKey::Event(&other),
+            ScopeType::Session,
+            RuleKind::Evidence
+        )
+        .count(),
+        0
+    );
 }
 
 #[test]
@@ -205,10 +265,27 @@ fn predicate_opcode_round_trip() {
     assert_eq!(p.ops.len(), 3);
     assert_eq!(
         p.ops[0],
-        PredOp::LoadEventField { binding: BindingIdx(0), field: FieldIdx(0), dst: slot(0) }
+        PredOp::LoadEventField {
+            binding: BindingIdx(0),
+            field: FieldIdx(0),
+            dst: slot(0)
+        }
     );
-    assert_eq!(p.ops[1], PredOp::LoadConst { imm: 1400, dst: slot(1) });
-    assert_eq!(p.ops[2], PredOp::CmpGt { lhs: slot(0), rhs: slot(1), dst: slot(2) });
+    assert_eq!(
+        p.ops[1],
+        PredOp::LoadConst {
+            imm: 1400,
+            dst: slot(1)
+        }
+    );
+    assert_eq!(
+        p.ops[2],
+        PredOp::CmpGt {
+            lhs: slot(0),
+            rhs: slot(1),
+            dst: slot(2)
+        }
+    );
     assert_eq!(p.result, slot(2));
     // Value semantics: an identical reconstruction compares equal.
     assert_eq!(p, segment_size_gt_1400());
@@ -217,13 +294,40 @@ fn predicate_opcode_round_trip() {
     // Window opcodes (06 §4 WIN group) shape-check.
     let win = Predicate {
         ops: Box::new([
-            PredOp::LoadEventField { binding: BindingIdx(0), field: FieldIdx(3), dst: slot(0) },
-            PredOp::LoadDuration { dur: dur(500), dst: slot(1) },
-            PredOp::WinBack { time: slot(0), dur: slot(1), dst: slot(2) },
-            PredOp::LoadDuration { dur: dur(1000), dst: slot(3) },
-            PredOp::WinFwd { time: slot(0), dur: slot(3), dst: slot(4) },
-            PredOp::LoadEventField { binding: BindingIdx(1), field: FieldIdx(3), dst: slot(5) },
-            PredOp::WinIn { x: slot(5), lo: slot(2), hi: slot(4), dst: slot(6) },
+            PredOp::LoadEventField {
+                binding: BindingIdx(0),
+                field: FieldIdx(3),
+                dst: slot(0),
+            },
+            PredOp::LoadDuration {
+                dur: dur(500),
+                dst: slot(1),
+            },
+            PredOp::WinBack {
+                time: slot(0),
+                dur: slot(1),
+                dst: slot(2),
+            },
+            PredOp::LoadDuration {
+                dur: dur(1000),
+                dst: slot(3),
+            },
+            PredOp::WinFwd {
+                time: slot(0),
+                dur: slot(3),
+                dst: slot(4),
+            },
+            PredOp::LoadEventField {
+                binding: BindingIdx(1),
+                field: FieldIdx(3),
+                dst: slot(5),
+            },
+            PredOp::WinIn {
+                x: slot(5),
+                lo: slot(2),
+                hi: slot(4),
+                dst: slot(6),
+            },
         ]),
         result: slot(6),
     };
@@ -250,7 +354,10 @@ fn rule3_pmtud_shape_is_expressible() {
     assert_eq!(rule.correlates.len(), 1);
     assert_eq!(
         rule.correlates[0].window,
-        WindowProof::Calculable { back: dur(500), forward: dur(1000) }
+        WindowProof::Calculable {
+            back: dur(500),
+            forward: dur(1000)
+        }
     );
     assert_eq!(rule.max_forward(), dur(1000));
     assert_eq!(rule.annotations.max_backward, dur(500));
@@ -261,10 +368,19 @@ fn rule3_pmtud_shape_is_expressible() {
     let branches = rule.branches.as_ref().expect("rule 3 has an if/else");
     assert!(matches!(
         branches.cond.ops[0],
-        PredOp::Present { binding: BindingIdx(1), .. }
+        PredOp::Present {
+            binding: BindingIdx(1),
+            ..
+        }
     ));
     match &branches.then_body[0] {
-        Intent::InferCause { cause, target, weight, evidence, .. } => {
+        Intent::InferCause {
+            cause,
+            target,
+            weight,
+            evidence,
+            ..
+        } => {
             assert_eq!(cause.as_str(), "PmtudBlackhole");
             assert_eq!(target.as_str(), "rtx.target");
             assert_eq!(weight.value(), 85);
@@ -284,7 +400,10 @@ fn rule3_pmtud_shape_is_expressible() {
     ));
     assert!(matches!(
         &branches.unknown_body[0],
-        Intent::EmitAction { kind: ActionKind::RequestTopology, .. }
+        Intent::EmitAction {
+            kind: ActionKind::RequestTopology,
+            ..
+        }
     ));
 
     // Both InferCause intents share the same static provenance prefix —
@@ -313,7 +432,11 @@ fn rule8_suppress_downstream_shape_is_expressible() {
             ]),
         },
         // time: upstream.time in [downstream.time - 30s, downstream.time + 5s]
-        window: WindowProof::Calculable { back: dur(30_000), forward: dur(5_000) },
+        window: WindowProof::Calculable {
+            back: dur(30_000),
+            forward: dur(5_000),
+        },
+        min_match: 1,
     }]);
     let rule = RuleInstance {
         id: RuleId::new("suppress_downstream"),
@@ -327,7 +450,10 @@ fn rule8_suppress_downstream_shape_is_expressible() {
         correlates,
         branches: Some(BranchTable {
             cond: Predicate {
-                ops: Box::new([PredOp::Present { binding: BindingIdx(1), dst: slot(0) }]),
+                ops: Box::new([PredOp::Present {
+                    binding: BindingIdx(1),
+                    dst: slot(0),
+                }]),
                 result: slot(0),
             },
             then_body: Box::new([Intent::SupersedeProblem {
@@ -363,11 +489,18 @@ fn rule8_suppress_downstream_shape_is_expressible() {
     // ProblemEmission re-eval lookup (03 §3.5, Example 8).
     let p = ProblemKind::new("DeviceUnreachable");
     let hits: Vec<_> = img
-        .rules_for(AnchorKey::Problem(&p), ScopeType::Global, RuleKind::Decision)
+        .rules_for(
+            AnchorKey::Problem(&p),
+            ScopeType::Global,
+            RuleKind::Decision,
+        )
         .collect();
     assert_eq!(hits.len(), 1);
     let rule = hits[0];
-    assert!(matches!(rule.correlates[0].source, CorrelateSource::Problem(_)));
+    assert!(matches!(
+        rule.correlates[0].source,
+        CorrelateSource::Problem(_)
+    ));
     assert_eq!(rule.correlates[0].topo.func.as_ref(), "upstream_of");
     let then_body = &rule.branches.as_ref().expect("has branch").then_body;
     assert!(matches!(

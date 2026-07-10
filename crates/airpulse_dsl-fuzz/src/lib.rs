@@ -166,7 +166,8 @@ mod tests {
     #[test]
     fn parse_ruleset_oversize_input_hits_limit_without_panic() {
         let source = "x".repeat(MAX_ADGL_SOURCE_BYTES + 1);
-        let err = airpulse_dsl_syntax::parse_ruleset(&source).expect_err("oversize source must fail");
+        let err =
+            airpulse_dsl_syntax::parse_ruleset(&source).expect_err("oversize source must fail");
         assert!(
             err.iter().any(|d| d.code == "ADGL0102"),
             "expected ADGL0102 for oversize source"

@@ -27,7 +27,11 @@ impl SlotIdx {
     /// data paths, `07-runtime.md` §9).
     #[must_use]
     pub const fn new(raw: u8) -> Option<SlotIdx> {
-        if (raw as usize) < MAX_SLOTS { Some(SlotIdx(raw)) } else { None }
+        if (raw as usize) < MAX_SLOTS {
+            Some(SlotIdx(raw))
+        } else {
+            None
+        }
     }
 
     /// Raw index, guaranteed `< MAX_SLOTS`.
@@ -338,7 +342,10 @@ impl Predicate {
     #[must_use]
     pub fn always_true() -> Predicate {
         let s0 = SlotIdx(0);
-        Predicate { ops: Box::new([PredOp::LoadConst { imm: 1, dst: s0 }]), result: s0 }
+        Predicate {
+            ops: Box::new([PredOp::LoadConst { imm: 1, dst: s0 }]),
+            result: s0,
+        }
     }
 }
 

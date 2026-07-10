@@ -24,6 +24,7 @@ topology-hops, rule-firings — все OOM-векторы. N-FDL имеет expl
 | max nesting | 64 | `ADGL0103` |
 | max `requires` entries | 32 | `ADGL0105` |
 | correlate blocks per rule | 8 | `ADGL0204` |
+| correlate `having` min match | 1..32 | `ADGL0504` / `ADGL0505` |
 | infer/emit per rule body | 16 | `ADGL0205` |
 
 ### Runtime (07, 08)

@@ -4,9 +4,7 @@
 //! never a borrowed store reference (`07-runtime.md` §2).
 
 use airpulse_dsl_store::{EdgeEndpoint, EventNode};
-use airpulse_dsl_types::{
-    CauseKind, Confidence, EventTime, NodeId, ProblemKind, ScopeId,
-};
+use airpulse_dsl_types::{CauseKind, Confidence, EventTime, NodeId, ProblemKind, ScopeId};
 
 use crate::interner::ScopeInterner;
 use crate::schema::EVENT_FIELD_TARGET;

@@ -20,7 +20,13 @@ fn session_scope() -> ScopeId {
     ScopeId::session((0x0a00_0001, 443), (0x0a00_0002, 51234))
 }
 
-fn evt(id: u64, event_type: &str, time_ms: i64, scope: ScopeId, fields: Vec<(FieldIdx, i64)>) -> EventNode {
+fn evt(
+    id: u64,
+    event_type: &str,
+    time_ms: i64,
+    scope: ScopeId,
+    fields: Vec<(FieldIdx, i64)>,
+) -> EventNode {
     EventNode::new(
         EventId::new(id),
         EventType::new(event_type),
@@ -32,7 +38,13 @@ fn evt(id: u64, event_type: &str, time_ms: i64, scope: ScopeId, fields: Vec<(Fie
 }
 
 fn rtx(id: u64, time_ms: i64, scope: ScopeId, segment_size: i64) -> EventNode {
-    evt(id, "tcp.retransmission_burst", time_ms, scope, vec![(fixtures::F_SEGMENT_SIZE, segment_size)])
+    evt(
+        id,
+        "tcp.retransmission_burst",
+        time_ms,
+        scope,
+        vec![(fixtures::F_SEGMENT_SIZE, segment_size)],
+    )
 }
 
 type OfflineEngine<'img> = Engine<'img, StaticTopology, OfflineAuditSink>;
@@ -82,7 +94,11 @@ fn g01_present_ptb_in_window_confirms_and_emits_problem() {
     assert_eq!(cause.kind.as_str(), "PmtudBlackhole");
     assert_eq!(cause.target, s);
     assert_eq!(cause.confidence.value(), 85);
-    assert_eq!(cause.time, t(10_000), "Cause.time = first-infer anchor time (04 §3)");
+    assert_eq!(
+        cause.time,
+        t(10_000),
+        "Cause.time = first-infer anchor time (04 §3)"
+    );
 
     // Decision fired on ConfidenceMutation (85 ≥ 80, 03 §3.5).
     assert_eq!(snap.problems.len(), 1);
@@ -118,17 +134,29 @@ fn g01_absent_ptb_fires_absent_branch_after_window_closes() {
 
     // Boundary check (08 §3.2): wm == upper must NOT resume.
     eng.advance_watermark(t(11_000));
-    assert_eq!(eng.store().pending_len(s), 1, "wm == upper: window not provably closed");
+    assert_eq!(
+        eng.store().pending_len(s),
+        1,
+        "wm == upper: window not provably closed"
+    );
     assert_eq!(eng.resumed(), 0);
 
     // Strictly past the upper bound → resume.
     eng.advance_watermark(t(11_001));
     assert_eq!(eng.store().pending_len(s), 0);
-    assert_eq!(eng.resumed(), 1, "resumed exactly when wm > upper (08 §3.2)");
+    assert_eq!(
+        eng.resumed(),
+        1,
+        "resumed exactly when wm > upper (08 §3.2)"
+    );
 
     let snap = eng.snapshot();
     assert_eq!(snap.causes.len(), 1);
-    assert_eq!(snap.causes[0].confidence.value(), 35, "absent branch weight +35");
+    assert_eq!(
+        snap.causes[0].confidence.value(),
+        35,
+        "absent branch weight +35"
+    );
     assert!(snap.problems.is_empty(), "35 < 80: no verdict");
 
     // request_observation audited as ADGL3001 ActionNoOpInReplay (07 §7).
@@ -137,7 +165,10 @@ fn g01_absent_ptb_fires_absent_branch_after_window_closes() {
     assert_eq!(entry.code, Some("ADGL3001"));
     assert_eq!(entry.intent.kind, ActionKind::RequestObservation);
     assert_eq!(entry.intent.rule.as_str(), "pmtud_hypothesis");
-    assert_eq!(entry.intent.arg.as_ref().map(|a| a.as_str()), Some("icmp.visibility"));
+    assert_eq!(
+        entry.intent.arg.as_ref().map(|a| a.as_str()),
+        Some("icmp.visibility")
+    );
     assert_eq!(
         entry.intent.target_path.as_ref().map(|p| p.as_str()),
         Some("rtx.path"),
@@ -177,15 +208,27 @@ fn c10_topology_unknown_fires_unknown_branch_request_topology() {
     let other_key = eng.intern_scope(other);
 
     eng.ingest(rtx(1, 10_000, s, 1500));
-    eng.ingest(evt(2, "icmp.ptb", 10_400, s, vec![(EVENT_FIELD_TARGET, other_key)]));
+    eng.ingest(evt(
+        2,
+        "icmp.ptb",
+        10_400,
+        s,
+        vec![(EVENT_FIELD_TARGET, other_key)],
+    ));
     eng.finish();
 
     let snap = eng.snapshot();
-    assert!(snap.causes.is_empty(), "Unknown skips then AND else bodies (03 §3.7)");
+    assert!(
+        snap.causes.is_empty(),
+        "Unknown skips then AND else bodies (03 §3.7)"
+    );
     assert!(snap.problems.is_empty());
     assert_eq!(snap.audit.len(), 1);
     assert_eq!(snap.audit[0].intent.kind, ActionKind::RequestTopology);
-    assert_eq!(snap.audit[0].code, None, "request_topology is a plain audit record");
+    assert_eq!(
+        snap.audit[0].code, None,
+        "request_topology is a plain audit record"
+    );
 }
 
 // ─── G05 — suppression + topology cycle (12 §3.4) ────────────────────────
@@ -198,7 +241,13 @@ fn suppression_engine(
     img: &airpulse_dsl_ir::ProgramImage,
     topo: StaticTopology,
 ) -> (OfflineEngine<'_>, i64, i64) {
-    let mut eng = Engine::new(img, topo, OfflineAuditSink::new(), Limits::default(), RunMode::Offline);
+    let mut eng = Engine::new(
+        img,
+        topo,
+        OfflineAuditSink::new(),
+        Limits::default(),
+        RunMode::Offline,
+    );
     let (r1, r2) = routers();
     let k1 = eng.intern_scope(r1);
     let k2 = eng.intern_scope(r2);
@@ -216,8 +265,20 @@ fn g05_upstream_failure_supersedes_downstream_problem() {
     topo.upstream_edge(r1, r2); // r1 directly upstream of r2
     let (mut eng, k1, k2) = suppression_engine(&img, topo);
 
-    eng.ingest(evt(1, stubs::STUB_EVENT_TYPE, 1_000, ScopeId::GLOBAL, vec![(EVENT_FIELD_TARGET, k1)]));
-    eng.ingest(evt(2, stubs::STUB_EVENT_TYPE, 2_000, ScopeId::GLOBAL, vec![(EVENT_FIELD_TARGET, k2)]));
+    eng.ingest(evt(
+        1,
+        stubs::STUB_EVENT_TYPE,
+        1_000,
+        ScopeId::GLOBAL,
+        vec![(EVENT_FIELD_TARGET, k1)],
+    ));
+    eng.ingest(evt(
+        2,
+        stubs::STUB_EVENT_TYPE,
+        2_000,
+        ScopeId::GLOBAL,
+        vec![(EVENT_FIELD_TARGET, k2)],
+    ));
     eng.finish();
 
     let snap = eng.snapshot();
@@ -229,11 +290,21 @@ fn g05_upstream_failure_supersedes_downstream_problem() {
     // Two problems; only the downstream one (r2) superseded.
     assert_eq!(snap.problems.len(), 2);
     let by_target = |target: ScopeId| {
-        snap.problems.iter().find(|p| p.target == target).expect("problem for target")
+        snap.problems
+            .iter()
+            .find(|p| p.target == target)
+            .expect("problem for target")
     };
     assert!(!by_target(r1).superseded, "upstream problem stays live");
-    assert!(by_target(r2).superseded, "downstream problem masked (C7 superseded flag)");
-    assert!(snap.problems.iter().all(|p| p.kind.as_str() == "DeviceUnreachable"));
+    assert!(
+        by_target(r2).superseded,
+        "downstream problem masked (C7 superseded flag)"
+    );
+    assert!(
+        snap.problems
+            .iter()
+            .all(|p| p.kind.as_str() == "DeviceUnreachable")
+    );
 
     // suppress_symptom audited with the example's reason string.
     let suppress: Vec<_> = snap
@@ -248,11 +319,19 @@ fn g05_upstream_failure_supersedes_downstream_problem() {
         suppress[0].intent.reason.as_deref(),
         Some("Masked by upstream topology failure")
     );
-    assert!(eng.topo().diagnostics().is_empty(), "acyclic topology: no ADGL3006");
+    assert!(
+        eng.topo().diagnostics().is_empty(),
+        "acyclic topology: no ADGL3006"
+    );
 
     // SARIF should only include the live (non-superseded) upstream problem.
     let sarif = to_sarif(&snap);
-    assert_eq!(sarif.matches("\"ruleId\":\"ap_device_unreachable\"").count(), 1);
+    assert_eq!(
+        sarif
+            .matches("\"ruleId\":\"ap_device_unreachable\"")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -266,8 +345,20 @@ fn g05_topology_cycle_isolates_no_suppression_with_diagnostic() {
     topo.upstream_edge(r1, r2).upstream_edge(r2, r1); // cycle
     let (mut eng, k1, k2) = suppression_engine(&img, topo);
 
-    eng.ingest(evt(1, stubs::STUB_EVENT_TYPE, 1_000, ScopeId::GLOBAL, vec![(EVENT_FIELD_TARGET, k1)]));
-    eng.ingest(evt(2, stubs::STUB_EVENT_TYPE, 2_000, ScopeId::GLOBAL, vec![(EVENT_FIELD_TARGET, k2)]));
+    eng.ingest(evt(
+        1,
+        stubs::STUB_EVENT_TYPE,
+        1_000,
+        ScopeId::GLOBAL,
+        vec![(EVENT_FIELD_TARGET, k1)],
+    ));
+    eng.ingest(evt(
+        2,
+        stubs::STUB_EVENT_TYPE,
+        2_000,
+        ScopeId::GLOBAL,
+        vec![(EVENT_FIELD_TARGET, k2)],
+    ));
     eng.finish();
 
     let snap = eng.snapshot();
@@ -277,11 +368,18 @@ fn g05_topology_cycle_isolates_no_suppression_with_diagnostic() {
         "cycle isolation: nothing suppressed"
     );
     assert!(
-        !snap.audit.iter().any(|e| e.intent.kind == ActionKind::SuppressSymptom),
+        !snap
+            .audit
+            .iter()
+            .any(|e| e.intent.kind == ActionKind::SuppressSymptom),
         "no suppress action emitted"
     );
     let diags = eng.topo().diagnostics();
     assert!(!diags.is_empty(), "cycle diagnostic present");
     assert!(diags.iter().all(|d| d.code() == "ADGL3006"));
-    assert!(diags.iter().any(|d| matches!(d, TopologyDiagnostic::UpstreamCycle { .. })));
+    assert!(
+        diags
+            .iter()
+            .any(|d| matches!(d, TopologyDiagnostic::UpstreamCycle { .. }))
+    );
 }

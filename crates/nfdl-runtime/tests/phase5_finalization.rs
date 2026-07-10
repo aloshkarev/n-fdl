@@ -26,15 +26,16 @@ fn hex_to_bytes(hex: &str) -> Vec<u8> {
 #[test]
 fn fsm_initial_state_is_machine_initial_not_idle() {
     let src = include_str!("../../../docs/examples/tcp.nfdl");
-    let pkt = hex_to_bytes(
-        "04d2 0050 00000000 00000000 5002 2000 0000 0000 48454c4c4f",
-    );
+    let pkt = hex_to_bytes("04d2 0050 00000000 00000000 5002 2000 0000 0000 48454c4c4f");
     let (_proto, ctx, final_state, evs) =
         parse_and_run_with_data_and_limits(src, &pkt, Limits::default()).expect("tcp run");
 
     assert_eq!(*ctx.get("is_syn").unwrap_or(&0), 1, "is_syn parsed");
     assert_eq!(*ctx.get("is_ack").unwrap_or(&0), 0, "is_ack parsed");
-    assert_eq!(final_state, "SYN_SENT", "fresh flow transitions from CLOSED");
+    assert_eq!(
+        final_state, "SYN_SENT",
+        "fresh flow transitions from CLOSED"
+    );
     assert!(
         evs.iter().any(|e| matches!(
             e,
@@ -52,13 +53,15 @@ fn fsm_initial_state_is_machine_initial_not_idle() {
 #[test]
 fn diameter_avp_with_payload_consumes_full_avp() {
     let src = include_str!("../../../docs/examples/diameter.nfdl");
-    let pkt = hex_to_bytes(
-        "0100002000000000000000000000000000000000000000010000000caabbccdd",
-    );
+    let pkt = hex_to_bytes("0100002000000000000000000000000000000000000000010000000caabbccdd");
     let (_proto, ctx, _state, _evs) =
         parse_and_run_with_data_and_limits(src, &pkt, Limits::default()).expect("diameter run");
 
-    assert_eq!(*ctx.get("__current_offset").unwrap_or(&0), 32, "full consumption");
+    assert_eq!(
+        *ctx.get("__current_offset").unwrap_or(&0),
+        32,
+        "full consumption"
+    );
     assert_eq!(*ctx.get("avps.a.code").unwrap_or(&0), 1, "avp code");
     assert_eq!(*ctx.get("avps.a.length").unwrap_or(&0), 12, "avp length");
     assert_eq!(
@@ -75,9 +78,7 @@ fn diameter_avp_with_payload_consumes_full_avp() {
 #[test]
 fn diameter_context_excludes_phantom_nested_avps() {
     let src = include_str!("../../../docs/examples/diameter.nfdl");
-    let pkt = hex_to_bytes(
-        "0100002000000000000000000000000000000000000000010000000caabbccdd",
-    );
+    let pkt = hex_to_bytes("0100002000000000000000000000000000000000000000010000000caabbccdd");
     let (_proto, ctx, _state, _evs) =
         parse_and_run_with_data_and_limits(src, &pkt, Limits::default()).expect("diameter run");
 
@@ -132,5 +133,9 @@ fn messageref_let_does_not_leak_to_sibling_match_arm() {
         0xAABB,
         "default arm used outer depth=2, not leaked Leaf depth=7"
     );
-    assert_eq!(*ctx.get("__current_offset").unwrap_or(&0), 3, "consumed kind + 2 bytes");
+    assert_eq!(
+        *ctx.get("__current_offset").unwrap_or(&0),
+        3,
+        "consumed kind + 2 bytes"
+    );
 }

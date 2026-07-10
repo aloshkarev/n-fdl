@@ -148,7 +148,10 @@ impl StaticTopology {
     /// bound (ADR-011 `max_topology_hops`).
     #[must_use]
     pub fn new(max_hops: usize) -> StaticTopology {
-        StaticTopology { max_hops: max_hops.max(1), ..StaticTopology::default() }
+        StaticTopology {
+            max_hops: max_hops.max(1),
+            ..StaticTopology::default()
+        }
     }
 
     /// Declares a scope as known to the topology without any relation —
@@ -201,7 +204,10 @@ impl StaticTopology {
     /// Recorded cycle / hop-bound diagnostics, in query order.
     #[must_use]
     pub fn diagnostics(&self) -> Vec<TopologyDiagnostic> {
-        self.diagnostics.lock().map(|d| d.clone()).unwrap_or_default()
+        self.diagnostics
+            .lock()
+            .map(|d| d.clone())
+            .unwrap_or_default()
     }
 
     fn record(&self, d: TopologyDiagnostic) {
@@ -235,33 +241,40 @@ impl StaticTopology {
         hops_left: usize,
         on_path: &mut BTreeSet<ScopeId>,
         done: &mut BTreeSet<ScopeId>,
-        cycle: &mut bool,
-        hop_overrun: &mut bool,
-        found: &mut bool,
+        outcome: &mut DfsOutcome,
     ) {
         on_path.insert(node);
         if let Some(nexts) = self.upstream.get(&node) {
             for &next in nexts {
                 if next == target {
-                    *found = true;
+                    outcome.found = true;
                 }
                 if on_path.contains(&next) {
-                    *cycle = true;
+                    outcome.cycle = true;
                     continue;
                 }
                 if done.contains(&next) {
                     continue;
                 }
                 if hops_left == 0 {
-                    *hop_overrun = true;
+                    outcome.hop_overrun = true;
                     continue;
                 }
-                self.dfs(next, target, hops_left - 1, on_path, done, cycle, hop_overrun, found);
+                self.dfs(next, target, hops_left - 1, on_path, done, outcome);
             }
         }
         on_path.remove(&node);
         done.insert(node);
     }
+}
+
+/// Accumulated DFS flags for `StaticTopology::dfs` (cycle detection, hop
+/// bound overrun, and target reachability).
+#[derive(Debug, Default, Clone, Copy)]
+struct DfsOutcome {
+    cycle: bool,
+    hop_overrun: bool,
+    found: bool,
 }
 
 impl TopologyProvider for StaticTopology {
@@ -295,27 +308,25 @@ impl TopologyProvider for StaticTopology {
         }
         let mut on_path = BTreeSet::new();
         let mut done = BTreeSet::new();
-        let (mut cycle, mut hop_overrun, mut found) = (false, false, false);
+        let mut outcome = DfsOutcome::default();
         self.dfs(
             down,
             up,
             self.max_hops,
             &mut on_path,
             &mut done,
-            &mut cycle,
-            &mut hop_overrun,
-            &mut found,
+            &mut outcome,
         );
-        if cycle {
+        if outcome.cycle {
             // Cycle isolation (07 §6): resolve to False + ADGL3006.
             self.record(TopologyDiagnostic::UpstreamCycle { from: down });
             return T3::False;
         }
-        if hop_overrun && !found {
+        if outcome.hop_overrun && !outcome.found {
             self.record(TopologyDiagnostic::HopBoundExceeded { from: down });
             return T3::False;
         }
-        T3::from(found)
+        T3::from(outcome.found)
     }
 }
 
@@ -334,18 +345,30 @@ mod tests {
         assert_eq!(topo.same_session(b, a), T3::True, "symmetric");
         assert_eq!(topo.same_session(a, a), T3::True, "reflexive");
         assert_eq!(topo.same_session(a, c), T3::False, "both known, unrelated");
-        assert_eq!(topo.same_session(a, ScopeId::vlan(99)), T3::Unknown, "unknown scope");
+        assert_eq!(
+            topo.same_session(a, ScopeId::vlan(99)),
+            T3::Unknown,
+            "unknown scope"
+        );
         assert_eq!(topo.same_vlan(a, b), T3::False, "relations are independent");
     }
 
     #[test]
     fn upstream_of_transitive_and_bounded() {
-        let (r1, r2, r3) = (ScopeId::port(1, 1), ScopeId::port(2, 1), ScopeId::port(3, 1));
+        let (r1, r2, r3) = (
+            ScopeId::port(1, 1),
+            ScopeId::port(2, 1),
+            ScopeId::port(3, 1),
+        );
         let mut topo = StaticTopology::new(16);
         topo.upstream_edge(r1, r2).upstream_edge(r2, r3);
         assert_eq!(topo.upstream_of(r1, r3), T3::True, "transitive");
         assert_eq!(topo.upstream_of(r3, r1), T3::False, "directed");
-        assert_eq!(topo.upstream_of(r1, r1), T3::False, "never upstream of itself");
+        assert_eq!(
+            topo.upstream_of(r1, r1),
+            T3::False,
+            "never upstream of itself"
+        );
         assert_eq!(topo.upstream_of(r1, ScopeId::port(9, 9)), T3::Unknown);
         assert!(topo.diagnostics().is_empty());
     }
@@ -370,10 +393,20 @@ mod tests {
         for w in scopes.windows(2) {
             topo.upstream_edge(w[1], w[0]); // chain: 5 upstream of 4 ... of 0
         }
-        assert_eq!(topo.upstream_of(scopes[2], scopes[0]), T3::True, "within bound");
-        assert_eq!(topo.upstream_of(scopes[5], scopes[0]), T3::False, "beyond bound");
+        assert_eq!(
+            topo.upstream_of(scopes[2], scopes[0]),
+            T3::True,
+            "within bound"
+        );
+        assert_eq!(
+            topo.upstream_of(scopes[5], scopes[0]),
+            T3::False,
+            "beyond bound"
+        );
         assert!(
-            topo.diagnostics().iter().any(|d| matches!(d, TopologyDiagnostic::HopBoundExceeded { .. }))
+            topo.diagnostics()
+                .iter()
+                .any(|d| matches!(d, TopologyDiagnostic::HopBoundExceeded { .. }))
         );
     }
 }

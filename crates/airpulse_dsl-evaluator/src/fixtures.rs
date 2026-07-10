@@ -40,7 +40,10 @@ fn weight(v: i8) -> Weight {
 }
 
 fn catalog_ref() -> CatalogRef {
-    CatalogRef { id: "airpulse.catalog".into(), version: "1.0".into() }
+    CatalogRef {
+        id: "airpulse.catalog".into(),
+        version: "1.0".into(),
+    }
 }
 
 /// `rtx.segment_size > 1400` (Example 01 anchor predicate; `06` §4.1
@@ -48,9 +51,20 @@ fn catalog_ref() -> CatalogRef {
 fn segment_size_gt_1400() -> Predicate {
     Predicate {
         ops: Box::new([
-            PredOp::LoadEventField { binding: BindingIdx(0), field: F_SEGMENT_SIZE, dst: slot(0) },
-            PredOp::LoadConst { imm: 1400, dst: slot(1) },
-            PredOp::CmpGt { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+            PredOp::LoadEventField {
+                binding: BindingIdx(0),
+                field: F_SEGMENT_SIZE,
+                dst: slot(0),
+            },
+            PredOp::LoadConst {
+                imm: 1400,
+                dst: slot(1),
+            },
+            PredOp::CmpGt {
+                lhs: slot(0),
+                rhs: slot(1),
+                dst: slot(2),
+            },
         ]),
         result: slot(2),
     }
@@ -65,8 +79,15 @@ fn confidence_ge_80() -> Predicate {
                 field: crate::schema::CAUSE_FIELD_CONFIDENCE,
                 dst: slot(0),
             },
-            PredOp::LoadConst { imm: 80, dst: slot(1) },
-            PredOp::CmpGe { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+            PredOp::LoadConst {
+                imm: 80,
+                dst: slot(1),
+            },
+            PredOp::CmpGe {
+                lhs: slot(0),
+                rhs: slot(1),
+                dst: slot(2),
+            },
         ]),
         result: slot(2),
     }
@@ -104,7 +125,11 @@ pub fn pmtud_hypothesis_rule() -> RuleInstance {
             func_idx: TopoFuncIdx(0),
             args: Box::new([MetricPath::new("rtx.target"), MetricPath::new("ptb.target")]),
         },
-        window: WindowProof::Calculable { back: dur(500), forward: dur(1000) },
+        window: WindowProof::Calculable {
+            back: dur(500),
+            forward: dur(1000),
+        },
+        min_match: 1,
     }]);
     let prov = ProvKey {
         rule: RuleId::new("pmtud_hypothesis"),
@@ -113,7 +138,10 @@ pub fn pmtud_hypothesis_rule() -> RuleInstance {
     };
     let branches = BranchTable {
         cond: Predicate {
-            ops: Box::new([PredOp::Present { binding: BindingIdx(1), dst: slot(0) }]),
+            ops: Box::new([PredOp::Present {
+                binding: BindingIdx(1),
+                dst: slot(0),
+            }]),
             result: slot(0),
         },
         then_body: Box::new([Intent::InferCause {
@@ -240,7 +268,11 @@ pub fn suppress_downstream_rule() -> RuleInstance {
                 MetricPath::new("downstream.target"),
             ]),
         },
-        window: WindowProof::Calculable { back: dur(30_000), forward: dur(5_000) },
+        window: WindowProof::Calculable {
+            back: dur(30_000),
+            forward: dur(5_000),
+        },
+        min_match: 1,
     }]);
     RuleInstance {
         id: RuleId::new("suppress_downstream"),
@@ -254,7 +286,10 @@ pub fn suppress_downstream_rule() -> RuleInstance {
         correlates: correlates.clone(),
         branches: Some(BranchTable {
             cond: Predicate {
-                ops: Box::new([PredOp::Present { binding: BindingIdx(1), dst: slot(0) }]),
+                ops: Box::new([PredOp::Present {
+                    binding: BindingIdx(1),
+                    dst: slot(0),
+                }]),
                 result: slot(0),
             },
             then_body: Box::new([

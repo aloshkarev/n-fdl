@@ -8,10 +8,10 @@
 //! `suppress_symptom`'s graph mutation (mark superseded) is executed by the
 //! engine via the `SupersedeProblem` intent; the sink only audits it.
 
-use airpulse_dsl_store::EdgeEndpoint;
-use airpulse_dsl_types::{ActionKind, CauseKind, EventTime, RuleId, ScopeId};
 use airpulse_dsl_ir::Symbol;
+use airpulse_dsl_store::EdgeEndpoint;
 use airpulse_dsl_types::MetricPath;
+use airpulse_dsl_types::{ActionKind, CauseKind, EventTime, RuleId, ScopeId};
 
 /// Execution mode (`08-stream-watermarking.md` §1). The spec sketches
 /// `RunMode` carrying the audit-log / eBPF-controller handles (`07` §7);

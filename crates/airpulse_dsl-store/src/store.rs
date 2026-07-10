@@ -156,7 +156,9 @@ impl GraphStore {
         // Prune unreachable provenance dedup keys alongside ring GC — same
         // horizon, same invariant (SubGraph::prune_provenance docs).
         for mut entry in self.partitions.iter_mut() {
-            entry.value_mut().prune_provenance(watermark, max_lookback, self.limits.dedup_window);
+            entry
+                .value_mut()
+                .prune_provenance(watermark, max_lookback, self.limits.dedup_window);
         }
         evicted
     }

@@ -62,10 +62,14 @@ pub struct CorrelateSpec {
     pub source: CorrelateSource, // Event | Problem | Cause — 02 §4 CorrelateSource (Example 8 = Problem)
     pub topo: TopoCall,
     pub window: WindowProof,     // Calculable { back, forward } | RuntimeCheck (05 §11)
+    pub min_match: u8,           // having: count >= N; default 1 (05 §8.2)
 }
 
 pub enum CorrelateSource { Event(EventType), Problem(ProblemKind), Cause(CauseKind) }
 ```
+
+`min_match` is compact only in verified IR. Parsed AST retains the original
+`i64` literal; verifier rejects values outside `1..=32` before conversion.
 
 ### 2.2 `PendingMatch` (WaitQueue entry, 08)
 

@@ -1,6 +1,5 @@
 ---
 source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
-assertion_line: 237
 expression: snap
 ---
 Snapshot {
@@ -50,6 +49,9 @@ Snapshot {
                     "PhysicalCableDamage",
                 ),
             ],
+            evidence_fields: {
+                "count": "1",
+            },
             superseded: false,
         },
     ],

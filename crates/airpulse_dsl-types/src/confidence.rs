@@ -21,13 +21,21 @@ impl Confidence {
     /// No panic on the data-driven path (`07-runtime.md` §9).
     #[must_use]
     pub const fn new(value: u8) -> Option<Confidence> {
-        if value <= 100 { Some(Confidence(value)) } else { None }
+        if value <= 100 {
+            Some(Confidence(value))
+        } else {
+            None
+        }
     }
 
     /// Constructs a confidence, clamping values above 100 down to 100.
     #[must_use]
     pub const fn new_clamped(value: u8) -> Confidence {
-        if value <= 100 { Confidence(value) } else { Confidence::MAX }
+        if value <= 100 {
+            Confidence(value)
+        } else {
+            Confidence::MAX
+        }
     }
 
     /// Raw `0..100` value.
@@ -99,7 +107,11 @@ impl Weight {
     /// (T-Weight typing rule, `04-type-system.md` §7).
     #[must_use]
     pub const fn new(value: i8) -> Option<Weight> {
-        if value >= -100 && value <= 100 { Some(Weight(value)) } else { None }
+        if value >= -100 && value <= 100 {
+            Some(Weight(value))
+        } else {
+            None
+        }
     }
 
     /// Raw `-100..=100` value.
@@ -165,7 +177,10 @@ mod tests {
     fn apply_is_commutative_within_bounds() {
         // ADR-002: accumulation is commutative (clamping makes order matter
         // only at the bounds; interior additions commute exactly).
-        assert_eq!(c(10).apply(w(20)).apply(w(30)), c(10).apply(w(30)).apply(w(20)));
+        assert_eq!(
+            c(10).apply(w(20)).apply(w(30)),
+            c(10).apply(w(30)).apply(w(20))
+        );
     }
 
     #[test]

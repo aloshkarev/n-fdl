@@ -149,21 +149,33 @@ mod tests {
         let e = EventType::new("tcp.retransmission_burst");
         assert_eq!(e, EventType::from("tcp.retransmission_burst"));
         assert_eq!(e.as_str(), "tcp.retransmission_burst");
-        assert_ne!(CauseKind::new("Congestion"), CauseKind::new("PmtudBlackhole"));
-        assert_eq!(SarifId::new("l3_pmtud_blackhole").to_string(), "l3_pmtud_blackhole");
+        assert_ne!(
+            CauseKind::new("Congestion"),
+            CauseKind::new("PmtudBlackhole")
+        );
+        assert_eq!(
+            SarifId::new("l3_pmtud_blackhole").to_string(),
+            "l3_pmtud_blackhole"
+        );
     }
 
     #[test]
     fn metric_path_segments() {
         let p = MetricPath::new("rtx.segment_size");
-        assert_eq!(p.segments().collect::<Vec<_>>(), vec!["rtx", "segment_size"]);
+        assert_eq!(
+            p.segments().collect::<Vec<_>>(),
+            vec!["rtx", "segment_size"]
+        );
         assert_eq!(p.as_str(), "rtx.segment_size");
     }
 
     #[test]
     fn action_kind_surface_names() {
         // 10 §5 keyword spellings.
-        assert_eq!(ActionKind::RequestObservation.as_str(), "request_observation");
+        assert_eq!(
+            ActionKind::RequestObservation.as_str(),
+            "request_observation"
+        );
         assert_eq!(ActionKind::RunCheck.as_str(), "run_check");
         assert_eq!(ActionKind::SuppressSymptom.as_str(), "suppress_symptom");
         assert_eq!(ActionKind::MarkAmbiguous.as_str(), "mark_ambiguous");

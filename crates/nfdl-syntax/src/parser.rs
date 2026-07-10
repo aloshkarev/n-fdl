@@ -534,7 +534,8 @@ impl<'a> Parser<'a> {
                 } else {
                     "constraint".into()
                 };
-                let o = body_seq; body_seq += 1;
+                let o = body_seq;
+                body_seq += 1;
                 validates.push(Validate {
                     expr: vexpr,
                     message,
@@ -604,8 +605,13 @@ impl<'a> Parser<'a> {
                     if self.current == Token::RBrace {
                         self.advance();
                     }
-                    let o = body_seq; body_seq += 1;
-                    matches.push(Match { tag, arms, order: o });
+                    let o = body_seq;
+                    body_seq += 1;
+                    matches.push(Match {
+                        tag,
+                        arms,
+                        order: o,
+                    });
                     continue;
                 }
                 if kw == "let" {
@@ -616,7 +622,8 @@ impl<'a> Parser<'a> {
                             self.advance();
                         }
                         if let Ok(val) = self.parse_expr() {
-                            let o = body_seq; body_seq += 1;
+                            let o = body_seq;
+                            body_seq += 1;
                             lets.push(Let {
                                 name: lname,
                                 value: val,
@@ -732,7 +739,8 @@ impl<'a> Parser<'a> {
                     if self.current == Token::RBrace {
                         self.advance();
                     }
-                    let o = body_seq; body_seq += 1;
+                    let o = body_seq;
+                    body_seq += 1;
                     loops.push(Loop {
                         name: loop_name,
                         carries,
@@ -781,7 +789,8 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                let o = body_seq; body_seq += 1;
+                let o = body_seq;
+                body_seq += 1;
                 fields.push(Field {
                     name: kw,
                     ty,
@@ -1182,7 +1191,8 @@ impl<'a> Parser<'a> {
                             } else {
                                 "constraint".into()
                             };
-                            let o = body_seq; body_seq += 1;
+                            let o = body_seq;
+                            body_seq += 1;
                             validates.push(Validate {
                                 expr: vexpr,
                                 message,
@@ -1252,8 +1262,13 @@ impl<'a> Parser<'a> {
                                 if self.current == Token::RBrace {
                                     self.advance();
                                 }
-                                let o = body_seq; body_seq += 1;
-                                matches.push(Match { tag, arms, order: o });
+                                let o = body_seq;
+                                body_seq += 1;
+                                matches.push(Match {
+                                    tag,
+                                    arms,
+                                    order: o,
+                                });
                                 continue;
                             }
                         }
@@ -1269,7 +1284,8 @@ impl<'a> Parser<'a> {
                                         self.advance();
                                     }
                                     if let Ok(val) = self.parse_expr() {
-                                        let o = body_seq; body_seq += 1;
+                                        let o = body_seq;
+                                        body_seq += 1;
                                         lets.push(Let {
                                             name: lname,
                                             value: val,
@@ -1411,7 +1427,8 @@ impl<'a> Parser<'a> {
                                 if self.contains_rem(&condition) {
                                     return Err(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in loop while condition (see spec 05-verification)".into()));
                                 }
-                                let o = body_seq; body_seq += 1;
+                                let o = body_seq;
+                                body_seq += 1;
                                 loops.push(Loop {
                                     name: loop_name,
                                     carries,
@@ -1453,7 +1470,8 @@ impl<'a> Parser<'a> {
                                     } else {
                                         "constraint".into()
                                     };
-                                    let o = body_seq; body_seq += 1;
+                                    let o = body_seq;
+                                    body_seq += 1;
                                     validate = Some(Validate {
                                         expr: vexpr,
                                         message,
@@ -1487,7 +1505,8 @@ impl<'a> Parser<'a> {
                                 }
                             }
 
-                            let o = body_seq; body_seq += 1;
+                            let o = body_seq;
+                            body_seq += 1;
                             fields.push(Field {
                                 name: kw,
                                 ty,

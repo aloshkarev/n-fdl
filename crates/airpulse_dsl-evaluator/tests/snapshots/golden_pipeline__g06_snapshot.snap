@@ -1,6 +1,5 @@
 ---
 source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
-assertion_line: 269
 expression: snap
 ---
 Snapshot {
@@ -50,6 +49,10 @@ Snapshot {
                     "TransientL2Disruption",
                 ),
             ],
+            evidence_fields: {
+                "segment_size": "1500",
+                "vlan": "-1201702728932031700",
+            },
             superseded: false,
         },
     ],

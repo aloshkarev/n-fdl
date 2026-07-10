@@ -23,6 +23,25 @@ Snapshot {
                 50,
             ),
         },
+        CauseView {
+            scope: ScopeId {
+                scope_type: Vlan,
+                key: 12161933625739840919,
+            },
+            kind: CauseKind(
+                "AuthServerOutage",
+            ),
+            target: ScopeId {
+                scope_type: Vlan,
+                key: 12161933625739840919,
+            },
+            time: EventTime(
+                20000,
+            ),
+            confidence: Confidence(
+                50,
+            ),
+        },
     ],
     problems: [],
     audit: [

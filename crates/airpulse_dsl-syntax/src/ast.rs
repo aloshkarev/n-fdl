@@ -194,6 +194,15 @@ pub struct ProblemAnchor<'a> {
     pub span: Span,
 }
 
+/// Optional `having: count >= N` threshold on correlate matches (`02` §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MinMatchClause {
+    /// Inclusive minimum true matches required to bind (`1..=32`).
+    pub count: i64,
+    /// Byte span of the threshold literal.
+    pub span: Span,
+}
+
 /// `CorrelateBlock` production.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrelateBlock<'a> {
@@ -205,6 +214,8 @@ pub struct CorrelateBlock<'a> {
     pub topo: TopoPredicate<'a>,
     /// Time window expression.
     pub time: TimeWindow<'a>,
+    /// Optional minimum match count (`having: count >= N`); omitted ≡ `N = 1`.
+    pub min_match: Option<MinMatchClause>,
     /// Byte span in source.
     pub span: Span,
 }

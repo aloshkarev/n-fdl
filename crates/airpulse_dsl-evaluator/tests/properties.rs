@@ -43,7 +43,11 @@ fn ptb(id: u64, time_ms: i64, scope: ScopeId) -> EventNode {
 
 /// Runs a stream through a fresh engine and extracts
 /// (snapshot, diagnostics).
-fn run(img: &ProgramImage, limits: Limits, stream: &[EventNode]) -> (Snapshot, Vec<EngineDiagnostic>) {
+fn run(
+    img: &ProgramImage,
+    limits: Limits,
+    stream: &[EventNode],
+) -> (Snapshot, Vec<EngineDiagnostic>) {
     let mut eng = Engine::new(
         img,
         StaticTopology::new(limits.max_topology_hops),
@@ -90,9 +94,19 @@ fn slot(i: u8) -> SlotIdx {
 fn overflow_predicate() -> Predicate {
     Predicate {
         ops: Box::new([
-            PredOp::LoadConst { imm: i64::MAX, dst: slot(0) },
-            PredOp::LoadConst { imm: 1, dst: slot(1) },
-            PredOp::Add { lhs: slot(0), rhs: slot(1), dst: slot(2) },
+            PredOp::LoadConst {
+                imm: i64::MAX,
+                dst: slot(0),
+            },
+            PredOp::LoadConst {
+                imm: 1,
+                dst: slot(1),
+            },
+            PredOp::Add {
+                lhs: slot(0),
+                rhs: slot(1),
+                dst: slot(2),
+            },
         ]),
         result: slot(2),
     }
@@ -187,20 +201,38 @@ fn flat_memory_gc_bounds_ring_and_drains_pending() {
         let time_ms = i as i64 * 20;
         eng.ingest(rtx(i, time_ms, s1, 1500));
         let len = eng.store().ring(s1).expect("ring exists").len();
-        assert!(len <= capacity, "ring len {len} exceeded capacity {capacity} at step {i}");
+        assert!(
+            len <= capacity,
+            "ring len {len} exceeded capacity {capacity} at step {i}"
+        );
     }
     eng.finish();
 
-    assert_eq!(eng.store().pending_len(s1), 0, "pending drained at end-of-stream");
-    assert_eq!(eng.suspended(), steps, "every anchor match suspended (forward window)");
-    assert_eq!(eng.resumed(), steps, "every suspension resumed exactly once");
+    assert_eq!(
+        eng.store().pending_len(s1),
+        0,
+        "pending drained at end-of-stream"
+    );
+    assert_eq!(
+        eng.suspended(),
+        steps,
+        "every anchor match suspended (forward window)"
+    );
+    assert_eq!(
+        eng.resumed(),
+        steps,
+        "every suspension resumed exactly once"
+    );
     for diag in eng.diagnostics() {
         assert!(
             !matches!(diag, EngineDiagnostic::MissingAnchor { .. }),
             "resume must never dangle (08 §6): {diag:?}"
         );
         assert!(
-            !matches!(diag, EngineDiagnostic::Store(StoreDiagnostic::RingBufferSpill { .. })),
+            !matches!(
+                diag,
+                EngineDiagnostic::Store(StoreDiagnostic::RingBufferSpill { .. })
+            ),
             "ring must be bounded by GC, not by spill: {diag:?}"
         );
     }

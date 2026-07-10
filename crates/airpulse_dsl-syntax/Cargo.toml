@@ -9,9 +9,11 @@ name = "airpulse_dsl_syntax"
 path = "src/lib.rs"
 
 [dependencies]
-winnow = { workspace = true }
+# concrete versions (matching workspace.dependencies) so this crate can be
+# consumed as a path dependency from the parent AirPulse workspace
+winnow = "0.7"
 airpulse_dsl-types = { path = "../airpulse_dsl-types" }
 ndsl-diag = { path = "../ndsl-diag" }
 
 [dev-dependencies]
-insta = { workspace = true }
+insta = "1"

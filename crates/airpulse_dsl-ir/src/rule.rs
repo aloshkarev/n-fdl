@@ -116,6 +116,9 @@ pub struct CorrelateSpec {
     pub topo: TopoCall,
     /// Verified window bound (`05` §11).
     pub window: WindowProof,
+    /// Minimum true topo matches required to bind (`having: count >= N`);
+    /// `1` is earliest-match semantics (`03` §3.2).
+    pub min_match: u8,
 }
 
 /// The if/else branch table of a rule body (`06-ir-bytecode.md` §3.1;
@@ -174,7 +177,11 @@ impl VerifiedAnnotations {
                 max_forward = max_forward.max(forward);
             }
         }
-        VerifiedAnnotations { max_backward, max_forward, target_scope }
+        VerifiedAnnotations {
+            max_backward,
+            max_forward,
+            target_scope,
+        }
     }
 }
 

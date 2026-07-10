@@ -49,6 +49,9 @@ Snapshot {
                     "PmtudBlackhole",
                 ),
             ],
+            evidence_fields: {
+                "segment_size": "1500",
+            },
             superseded: false,
         },
     ],

@@ -1,0 +1,60 @@
+---
+source: third_party/n-fdl/crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+assertion_line: 463
+expression: snap
+---
+Snapshot {
+    causes: [
+        CauseView {
+            scope: ScopeId {
+                scope_type: Port,
+                key: 17633223511170641925,
+            },
+            kind: CauseKind(
+                "PhysicalCableDamage",
+            ),
+            target: ScopeId {
+                scope_type: Port,
+                key: 17633223511170641925,
+            },
+            time: EventTime(
+                10000,
+            ),
+            confidence: Confidence(
+                90,
+            ),
+        },
+    ],
+    problems: [
+        ProblemView {
+            scope: ScopeId {
+                scope_type: Port,
+                key: 17633223511170641925,
+            },
+            kind: ProblemKind(
+                "CableDisconnected",
+            ),
+            target: ScopeId {
+                scope_type: Port,
+                key: 17633223511170641925,
+            },
+            time: EventTime(
+                20000,
+            ),
+            severity: High,
+            sarif_id: SarifId(
+                "ap_port_cable_disconnected",
+            ),
+            cause_kinds: [
+                CauseKind(
+                    "PhysicalCableDamage",
+                ),
+            ],
+            evidence_fields: {
+                "count": "1",
+            },
+            superseded: false,
+        },
+    ],
+    audit: [],
+}

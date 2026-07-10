@@ -102,7 +102,8 @@ pub struct AmbiguityNode {
 }
 
 /// Evidence-edge kind — the `infer`-creatable subset of `04` §4 `EdgeKind`
-/// (`EvidenceEdge ∈ {Supports, Contradicts, Explains}`).
+/// (`EvidenceEdge ∈ {Supports, Contradicts, Explains}`) plus the cross-scope
+/// roll-up provenance edge (`09` §3.2 `RollsUp{ child → parent }`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EvidenceEdgeKind {
     /// `weight > 0` support (`04` §4).
@@ -111,6 +112,9 @@ pub enum EvidenceEdgeKind {
     Contradicts,
     /// Neutral correlation.
     Explains,
+    /// Cross-scope roll-up provenance: child-scope cause → parent-scope
+    /// cause (`09` §3.2, ADR-003).
+    RollsUp,
 }
 
 /// Edge source: an event in the ring (referenced by [`EventId`] — rings
@@ -220,7 +224,8 @@ impl SubGraph {
         // before recording the new timestamp.
         self.emitted_problems
             .retain(|(r, p, t, _)| !(r == rule && p == problem && *t == target));
-        self.emitted_problems.insert((rule.clone(), problem.clone(), target, wm.millis()))
+        self.emitted_problems
+            .insert((rule.clone(), problem.clone(), target, wm.millis()))
     }
 
     /// Sweeps cooldown entries whose timestamp is older than
@@ -234,7 +239,8 @@ impl SubGraph {
     pub fn prune_emitted(&mut self, wm: EventTime, max_cooldown: DurationMs) -> usize {
         let before = self.emitted_problems.len();
         let horizon = wm.sub(max_cooldown).millis();
-        self.emitted_problems.retain(|(_, _, _, emitted_wm)| *emitted_wm >= horizon);
+        self.emitted_problems
+            .retain(|(_, _, _, emitted_wm)| *emitted_wm >= horizon);
         before - self.emitted_problems.len()
     }
 

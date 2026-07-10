@@ -197,7 +197,10 @@ impl BytecodeVm {
     /// Whether `slot` was written by an executed instruction (vs. a
     /// compile-time-registered but runtime-unreached phantom slot).
     pub fn slot_touched(&self, slot: u16) -> bool {
-        self.slot_touched.get(slot as usize).copied().unwrap_or(false)
+        self.slot_touched
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn current_offset(&self) -> usize {
@@ -484,8 +487,8 @@ impl BytecodeVm {
                         BytecodeBinOp::BitAnd => l & r,
                         BytecodeBinOp::BitOr => l | r,
                         BytecodeBinOp::BitXor => l ^ r,
-                    BytecodeBinOp::Shl => l << (r as u32),
-                    BytecodeBinOp::Shr => l >> (r as u32),
+                        BytecodeBinOp::Shl => l << (r as u32),
+                        BytecodeBinOp::Shr => l >> (r as u32),
                     };
                     self.write_slot(*dst, val);
                     ip += 1;

@@ -2,6 +2,8 @@
 //! final graph state read out in a stable order for golden assertions and
 //! the later SARIF emitter (T-08).
 
+use std::collections::BTreeMap;
+
 use airpulse_dsl_types::{
     CauseKind, Confidence, EventTime, ProblemKind, SarifId, ScopeId, Severity,
 };
@@ -40,6 +42,8 @@ pub struct ProblemView {
     pub sarif_id: SarifId,
     /// Cause kinds referenced by this problem's evidence list, in stable order.
     pub cause_kinds: Vec<CauseKind>,
+    /// Event field values linked via cause evidence edges (field name → value).
+    pub evidence_fields: BTreeMap<String, String>,
     /// `suppress_symptom` flag (C7 — append-only retraction).
     pub superseded: bool,
 }
