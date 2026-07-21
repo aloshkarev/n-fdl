@@ -330,6 +330,10 @@ name = "nfdl-ir"
 version = "0.1.0"
 
 [[package]]
+name = "nfdl-plugin"
+version = "0.1.0"
+
+[[package]]
 name = "nfdl-runtime"
 version = "0.1.0"
 dependencies = [

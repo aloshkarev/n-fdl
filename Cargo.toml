@@ -20,6 +20,7 @@ members = [
     "crates/nfdl-bytecode",
     "crates/nfdl-vm",
     "crates/nfdl-runtime",
+    "crates/nfdl-plugin",
     "crates/nfdl-diag",
     "crates/nfdl-cli", "crates/airpulse_dsl-verify",
 ]
@@ -39,6 +40,7 @@ ndsl-clippy = { path = "crates/ndsl-clippy" }
 ndsl-cli = { path = "crates/ndsl-cli" }
 nfdl-bytecode = { path = "crates/nfdl-bytecode" }
 nfdl-vm = { path = "crates/nfdl-vm" }
+nfdl-plugin = { path = "crates/nfdl-plugin" }
 dashmap = "6"
 winnow = "0.7"
 insta = "1"

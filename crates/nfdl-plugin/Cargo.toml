@@ -1,0 +1,9 @@
+[package]
+name = "nfdl-plugin"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "N-FDL Plugin ABI v1 stub (pure Rust; no C FFI yet)"
+
+[dependencies]
