@@ -120,9 +120,32 @@ const KEYWORDS: &[&str] = &[
 
 /// Parse an ADGL ruleset from source.
 ///
-/// v1 behavior: this parser stops at the first syntax error and returns a
-/// single diagnostic. Multi-error recovery/reporting is deferred to v1.5.
+/// On rule/decl-level syntax errors the parser records a diagnostic, resyncs to
+/// the next ruleset member (`}` or keywords `evidence` / `decision` /
+/// `mutually_exclusive` / `version` / `requires`), and continues so later errors
+/// accumulate in the same [`DiagBuffer`]. A successful AST is returned only when
+/// no diagnostics were recorded; otherwise `Err(buf)` carries every diagnostic.
 pub fn parse_ruleset<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
+    match tokenize(src) {
+        Ok(tokens) => {
+            let mut p = ParserState::new(tokens);
+            p.recover = true;
+            match p.parse_ruleset() {
+                Ok(ast) if p.diags.is_empty() => Ok(ast),
+                Ok(_) => Err(std::mem::take(&mut p.diags)),
+                Err(err) => {
+                    p.record_error(err);
+                    Err(std::mem::take(&mut p.diags))
+                }
+            }
+        }
+        Err(err) => Err(diag_from_err(err)),
+    }
+}
+
+/// Fail-fast variant: stops at the first syntax error (no rule/decl recovery).
+#[cfg(test)]
+fn parse_ruleset_fail_fast<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
     match tokenize(src) {
         Ok(tokens) => match ParserState::new(tokens).parse_ruleset() {
             Ok(ast) => Ok(ast),
@@ -159,12 +182,16 @@ pub fn parse_expression<'a>(src: &'a str) -> Result<Expr<'a>, DiagBuffer> {
 
 fn diag_from_err(err: ParseErr) -> DiagBuffer {
     let mut buf = DiagBuffer::new();
-    buf.push(Diagnostic::error(
+    buf.push(diag_of(err));
+    buf
+}
+
+fn diag_of(err: ParseErr) -> Diagnostic {
+    Diagnostic::error(
         err.code,
         format!("{} (expected: {})", err.message, err.expected),
         err.span,
-    ));
-    buf
+    )
 }
 
 // ============================================================================
@@ -510,16 +537,14 @@ impl<'a> Lexer<'a> {
 
     fn lex_ident_or_kw(&mut self, start: usize) -> Result<Token<'a>, ParseErr> {
         let mut input = self.rest();
-        let parsed: &str = take_while::<_, _, InputError<&str>>(1.., is_ident_continue)
-            .parse_next(&mut input)
-            .map_err(|_| {
-                ParseErr::new(
-                    "ADGL0100",
-                    "malformed identifier",
-                    "identifier",
-                    Span::new(start, start + 1),
-                )
-            })?;
+        let parsed = take_run(&mut input, is_ident_continue).map_err(|_| {
+            ParseErr::new(
+                "ADGL0100",
+                "malformed identifier",
+                "identifier",
+                Span::new(start, start + 1),
+            )
+        })?;
         if parsed.len() > 255 {
             return Err(ParseErr::new(
                 "ADGL0101",
@@ -748,6 +773,13 @@ fn is_ident_continue(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+/// Maximal run via winnow `take_while` — keeps lexer helpers readable.
+fn take_run<'a>(input: &mut &'a str, pred: impl Fn(char) -> bool) -> Result<&'a str, ()> {
+    take_while::<_, _, InputError<&str>>(1.., pred)
+        .parse_next(input)
+        .map_err(|_| ())
+}
+
 fn keyword_static(s: &str) -> &'static str {
     match s {
         "ruleset" => "ruleset",
@@ -787,11 +819,22 @@ fn keyword_static(s: &str) -> &'static str {
 struct ParserState<'a> {
     tokens: Vec<Token<'a>>,
     idx: usize,
+    /// Nesting depth of `{` / `}` only (ruleset / rule / stmt blocks).
+    brace_depth: usize,
+    /// When true, rule/decl errors are recorded and parsing continues after resync.
+    recover: bool,
+    diags: DiagBuffer,
 }
 
 impl<'a> ParserState<'a> {
     fn new(tokens: Vec<Token<'a>>) -> Self {
-        Self { tokens, idx: 0 }
+        Self {
+            tokens,
+            idx: 0,
+            brace_depth: 0,
+            recover: false,
+            diags: DiagBuffer::new(),
+        }
     }
 
     fn peek(&self) -> &Token<'a> {
@@ -805,9 +848,83 @@ impl<'a> ParserState<'a> {
 
     fn next(&mut self) -> &Token<'a> {
         if self.idx + 1 < self.tokens.len() {
+            match self.peek_kind() {
+                TokenKind::LBrace => self.brace_depth += 1,
+                TokenKind::RBrace => self.brace_depth = self.brace_depth.saturating_sub(1),
+                _ => {}
+            }
             self.idx += 1;
         }
         self.peek()
+    }
+
+    fn record_error(&mut self, err: ParseErr) {
+        self.diags.push(diag_of(err));
+    }
+
+    fn is_sync_keyword(kw: &str) -> bool {
+        matches!(
+            kw,
+            "evidence" | "decision" | "mutually_exclusive" | "version" | "requires"
+        )
+    }
+
+    /// Sync to the next ruleset member: leave cursor on a sync keyword or the
+    /// ruleset-closing `}` (brace depth 1), consuming the failed rule's `}` when
+    /// present. Keywords inside nested blocks are ignored via brace depth.
+    fn resync_decl_or_rule(&mut self) {
+        let start_idx = self.idx;
+        // Ruleset body sits at depth 1 after `ruleset "…" {`.
+        let target_depth = 1;
+        loop {
+            match self.peek_kind() {
+                TokenKind::Eof => break,
+                TokenKind::Kw(k)
+                    if self.brace_depth == target_depth && Self::is_sync_keyword(k) =>
+                {
+                    break;
+                }
+                TokenKind::RBrace if self.brace_depth == target_depth => {
+                    // Ruleset closer — leave for the caller.
+                    break;
+                }
+                TokenKind::RBrace if self.brace_depth == target_depth + 1 => {
+                    // Close the failed rule/decl block, then stop.
+                    let _ = self.next();
+                    break;
+                }
+                _ => {
+                    let _ = self.next();
+                }
+            }
+        }
+        if self.idx == start_idx {
+            match self.peek_kind() {
+                TokenKind::Eof => {}
+                TokenKind::Kw(k) if Self::is_sync_keyword(k) => {}
+                TokenKind::RBrace if self.brace_depth <= target_depth => {}
+                _ => {
+                    let _ = self.next();
+                }
+            }
+        }
+    }
+
+    /// Record + resync on recovery; otherwise propagate.
+    /// `Ok(None)` means the caller should `continue` the surrounding loop.
+    fn recover_item<T>(&mut self, result: Result<T, ParseErr>) -> Result<Option<T>, ParseErr> {
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => {
+                if self.recover {
+                    self.record_error(e);
+                    self.resync_decl_or_rule();
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     fn consume_kw(&mut self, kw: &'static str) -> Result<Span, ParseErr> {
@@ -875,10 +992,18 @@ impl<'a> ParserState<'a> {
         loop {
             match self.peek_kind() {
                 TokenKind::Kw("evidence") => {
-                    rules.push(RuleDecl::Evidence(self.parse_evidence_rule()?))
+                    let parsed = self.parse_evidence_rule();
+                    let Some(rule) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    rules.push(RuleDecl::Evidence(rule));
                 }
                 TokenKind::Kw("decision") => {
-                    rules.push(RuleDecl::Decision(self.parse_decision_rule()?))
+                    let parsed = self.parse_decision_rule();
+                    let Some(rule) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    rules.push(RuleDecl::Decision(rule));
                 }
                 _ => break,
             }
@@ -910,11 +1035,19 @@ impl<'a> ParserState<'a> {
         loop {
             match self.peek_kind() {
                 TokenKind::Kw("requires") => {
-                    decls.push(Decl::Requires(self.parse_requires_decl()?))
+                    let parsed = self.parse_requires_decl();
+                    let Some(decl) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    decls.push(Decl::Requires(decl));
                 }
-                TokenKind::Kw("mutually_exclusive") => decls.push(Decl::MutuallyExclusive(
-                    self.parse_mutually_exclusive_decl()?,
-                )),
+                TokenKind::Kw("mutually_exclusive") => {
+                    let parsed = self.parse_mutually_exclusive_decl();
+                    let Some(decl) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    decls.push(Decl::MutuallyExclusive(decl));
+                }
                 _ => break,
             }
         }
@@ -2121,5 +2254,27 @@ mod tests {
         let mut lexer = Lexer::new(src);
         let err = lexer.skip_ws_and_comments().unwrap_err();
         assert_eq!(err.code, "ADGL0106");
+    }
+
+    #[test]
+    fn fail_fast_returns_only_first_rule_error() {
+        let src = r#"
+ruleset "Bad" {
+  version = "1.0"
+  evidence first {
+    scope: Session
+    anchor a: event(tcp.retransmission_burst)
+    emit Problem(X) { severity: High, evidence: [a] }
+  }
+  evidence second {
+    scope: Session
+    anchor b: event(tcp.retransmission_burst)
+    emit Problem(Y) { severity: High, evidence: [b] }
+  }
+}
+"#;
+        let err = parse_ruleset_fail_fast(src).expect_err("must fail");
+        assert_eq!(err.len(), 1, "fail-fast must not recover: {}", err.render(src, "ff.adgl"));
+        assert!(err.render(src, "ff.adgl").contains("ADGL0450"));
     }
 }
