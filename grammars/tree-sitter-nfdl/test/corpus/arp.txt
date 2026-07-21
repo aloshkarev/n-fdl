@@ -1,0 +1,295 @@
+================================================================================
+ARP protocol
+================================================================================
+
+// ============================================================================
+// ARP — L2, fixed/dependent layout, refinement types
+// Demonstrates: scalars, validate (refinement), dependent bytes[expr], bind.
+// mode = datagram: no NeedMoreBytes, bytes[..] = rest-of-slice.
+// ============================================================================
+
+protocol ARP {
+    meta {
+        endian = big;
+        mode   = datagram;
+    }
+
+    message ArpPacket {
+        hw_type:    u16;
+        proto_type: u16;
+        validate proto_type == 0x0800 -> "Only IPv4 supported";
+
+        hw_len:     u8;
+        validate hw_len > 0 -> "HW len must be > 0";
+
+        proto_len:  u8;
+        validate proto_len > 0 -> "Proto len must be > 0";
+
+        opcode:     u16;
+        validate opcode >= 1 && opcode <= 4 -> "Invalid ARP opcode";
+
+        // dependent-length slices; bounds proven from validate facts above
+        sender_mac: bytes[hw_len];
+        sender_ip:  bytes[proto_len];
+        target_mac: bytes[hw_len];
+        target_ip:  bytes[proto_len];
+    }
+
+    // layer binding: Ethernet delivers payload to ArpPacket when ethertype matches
+    bind Ethernet payload to ArpPacket when ethertype == 0x0806;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (line_comment)
+  (line_comment)
+  (line_comment)
+  (line_comment)
+  (protocol_decl
+    (identifier)
+    (meta_decl
+      (meta_entry)
+      (meta_entry))
+    (message_decl
+      (identifier)
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (validate_stmt
+        (expr
+          (ternary
+            (coalesce
+              (logic_or
+                (logic_and
+                  (equality
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (identifier))))))))))
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (integer))))))))))))))))
+        (string))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (validate_stmt
+        (expr
+          (ternary
+            (coalesce
+              (logic_or
+                (logic_and
+                  (equality
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (identifier))))))
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (integer))))))))))))))))
+        (string))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (validate_stmt
+        (expr
+          (ternary
+            (coalesce
+              (logic_or
+                (logic_and
+                  (equality
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (identifier))))))
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (integer))))))))))))))))
+        (string))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (validate_stmt
+        (expr
+          (ternary
+            (coalesce
+              (logic_or
+                (logic_and
+                  (equality
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (identifier))))))
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (integer)))))))))))
+                  (equality
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (identifier))))))
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (integer))))))))))))))))
+        (string))
+      (line_comment)
+      (field_stmt
+        (identifier)
+        (bytes_type
+          (expr
+            (ternary
+              (coalesce
+                (logic_or
+                  (logic_and
+                    (equality
+                      (bit_or
+                        (bit_xor
+                          (bit_and
+                            (relational
+                              (shift
+                                (additive
+                                  (multiplicative
+                                    (unary
+                                      (postfix
+                                        (identifier))))))))))))))))))
+      (field_stmt
+        (identifier)
+        (bytes_type
+          (expr
+            (ternary
+              (coalesce
+                (logic_or
+                  (logic_and
+                    (equality
+                      (bit_or
+                        (bit_xor
+                          (bit_and
+                            (relational
+                              (shift
+                                (additive
+                                  (multiplicative
+                                    (unary
+                                      (postfix
+                                        (identifier))))))))))))))))))
+      (field_stmt
+        (identifier)
+        (bytes_type
+          (expr
+            (ternary
+              (coalesce
+                (logic_or
+                  (logic_and
+                    (equality
+                      (bit_or
+                        (bit_xor
+                          (bit_and
+                            (relational
+                              (shift
+                                (additive
+                                  (multiplicative
+                                    (unary
+                                      (postfix
+                                        (identifier))))))))))))))))))
+      (field_stmt
+        (identifier)
+        (bytes_type
+          (expr
+            (ternary
+              (coalesce
+                (logic_or
+                  (logic_and
+                    (equality
+                      (bit_or
+                        (bit_xor
+                          (bit_and
+                            (relational
+                              (shift
+                                (additive
+                                  (multiplicative
+                                    (unary
+                                      (postfix
+                                        (identifier)))))))))))))))))))
+    (line_comment)
+    (bind_decl
+      (identifier)
+      (identifier)
+      (expr
+        (ternary
+          (coalesce
+            (logic_or
+              (logic_and
+                (equality
+                  (bit_or
+                    (bit_xor
+                      (bit_and
+                        (relational
+                          (shift
+                            (additive
+                              (multiplicative
+                                (unary
+                                  (postfix
+                                    (identifier))))))))))
+                  (bit_or
+                    (bit_xor
+                      (bit_and
+                        (relational
+                          (shift
+                            (additive
+                              (multiplicative
+                                (unary
+                                  (postfix
+                                    (integer)))))))))))))))))))

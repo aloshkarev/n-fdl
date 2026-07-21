@@ -1,0 +1,89 @@
+================================================================================
+UDP datagram header
+================================================================================
+
+protocol UDP {
+    meta {
+        endian = big;
+        mode   = datagram;
+    }
+
+    message Datagram {
+        src_port: u16;
+        dst_port: u16;
+        length:   u16;
+        validate length >= 8 -> "UDP length must include 8-byte header";
+        checksum: u16;
+        payload:  bytes[length - 8];
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (protocol_decl
+    (identifier)
+    (meta_decl
+      (meta_entry)
+      (meta_entry))
+    (message_decl
+      (identifier)
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (validate_stmt
+        (expr
+          (ternary
+            (coalesce
+              (logic_or
+                (logic_and
+                  (equality
+                    (bit_or
+                      (bit_xor
+                        (bit_and
+                          (relational
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (identifier))))))
+                            (shift
+                              (additive
+                                (multiplicative
+                                  (unary
+                                    (postfix
+                                      (integer))))))))))))))))
+        (string))
+      (field_stmt
+        (identifier)
+        (scalar_type))
+      (field_stmt
+        (identifier)
+        (bytes_type
+          (expr
+            (ternary
+              (coalesce
+                (logic_or
+                  (logic_and
+                    (equality
+                      (bit_or
+                        (bit_xor
+                          (bit_and
+                            (relational
+                              (shift
+                                (additive
+                                  (multiplicative
+                                    (unary
+                                      (postfix
+                                        (identifier))))
+                                  (multiplicative
+                                    (unary
+                                      (postfix
+                                        (integer)))))))))))))))))))))
