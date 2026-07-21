@@ -6,3 +6,6 @@ rust-version = "1.85"
 
 [dependencies]
 ndsl-trivia = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

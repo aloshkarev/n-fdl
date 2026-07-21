@@ -71,6 +71,8 @@ impl<'a> Parser<'a> {
                 self.contains_rem(value) || self.contains_rem(default)
             }
             Expr::Call { args, .. } => args.iter().any(|a| self.contains_rem(a)),
+            Expr::Field(base, _) => self.contains_rem(base),
+            Expr::Tuple(xs) => xs.iter().any(|a| self.contains_rem(a)),
             _ => false,
         }
     }
@@ -448,24 +450,24 @@ impl<'a> Parser<'a> {
 
     /// Parse a field type. Handles scalars `u8`/`u16`/`u24`/`u32`,
     /// `bytes[expr]` / `bytes[EOF]` / `bytes[stream]` / `bytes[..]` (rest),
-    /// `bitfield{k}`, and bare-ident `MessageRef`.
-    fn parse_type(&mut self) -> NfdlType {
+    /// `bitfield{k}` (EBNF: 1..=64 bits), and bare-ident `MessageRef`.
+    fn parse_type(&mut self) -> Result<NfdlType, ParseError> {
         match &self.current {
             Token::Ident(t) if t == "u8" => {
                 self.advance();
-                NfdlType::U8
+                Ok(NfdlType::U8)
             }
             Token::Ident(t) if t == "u16" => {
                 self.advance();
-                NfdlType::U16
+                Ok(NfdlType::U16)
             }
             Token::Ident(t) if t == "u24" => {
                 self.advance();
-                NfdlType::U24
+                Ok(NfdlType::U24)
             }
             Token::Ident(t) if t == "u32" => {
                 self.advance();
-                NfdlType::U32
+                Ok(NfdlType::U32)
             }
             Token::Ident(t) if t == "bytes" => {
                 self.advance();
@@ -497,40 +499,53 @@ impl<'a> Parser<'a> {
                     if self.current == Token::RBracket {
                         self.advance();
                     }
-                    ty
+                    Ok(ty)
                 } else {
-                    NfdlType::BytesRest
+                    Ok(NfdlType::BytesRest)
                 }
             }
             Token::Ident(t) if t == "bitfield" => {
                 self.advance();
-                let bits = if self.current == Token::LBrace {
-                    self.advance();
-                    let b = if let Token::Int(v) = &self.current {
-                        let v = *v as u8;
+                if self.current != Token::LBrace {
+                    return Err(ParseError::Syntax(
+                        "expected `{` after bitfield (BitfieldType = bitfield { INT })".into(),
+                    ));
+                }
+                self.advance();
+                let bits = match &self.current {
+                    Token::Int(v) => {
+                        let v = *v;
                         self.advance();
-                        v
-                    } else {
-                        0
-                    };
-                    if self.current == Token::RBrace {
-                        self.advance();
+                        if !(1..=64).contains(&v) {
+                            return Err(ParseError::Syntax(format!(
+                                "bitfield width must be in 1..=64, got {v}"
+                            )));
+                        }
+                        v as u8
                     }
-                    b
-                } else {
-                    0
+                    _ => {
+                        return Err(ParseError::Syntax(
+                            "expected INT bit width in bitfield{k}".into(),
+                        ));
+                    }
                 };
-                NfdlType::Bitfield { bits }
+                if self.current != Token::RBrace {
+                    return Err(ParseError::Syntax(
+                        "expected `}` after bitfield width".into(),
+                    ));
+                }
+                self.advance();
+                Ok(NfdlType::Bitfield { bits })
             }
             Token::Ident(t) => {
                 let tname = t.clone();
                 self.advance();
-                NfdlType::MessageRef(tname)
+                Ok(NfdlType::MessageRef(tname))
             }
             _ => {
                 // Unknown — consume one token to make progress, default to u8.
                 self.advance();
-                NfdlType::U8
+                Ok(NfdlType::U8)
             }
         }
     }
@@ -538,8 +553,10 @@ impl<'a> Parser<'a> {
     /// Parse a `match`-arm or message body block (the `{ ... }` contents, with
     /// `{` already consumed) up to and including the closing `}`. Handles
     /// `let`, `loop` (with optional `carry`/`while`/`next`), standalone
-    /// `validate`, nested `match`, and plain `field: type;`.
-    fn parse_arm_body(&mut self) -> (Vec<Field>, Vec<Let>, Vec<Loop>, Vec<Validate>, Vec<Match>) {
+    /// `validate`, nested `match`, and plain `field: type [if cond];`.
+    fn parse_arm_body(
+        &mut self,
+    ) -> Result<(Vec<Field>, Vec<Let>, Vec<Loop>, Vec<Validate>, Vec<Match>), ParseError> {
         let mut fields = vec![];
         let mut lets = vec![];
         let mut loops = vec![];
@@ -619,7 +636,7 @@ impl<'a> Parser<'a> {
                         if self.current == Token::LBrace {
                             self.advance();
                         }
-                        let (af, al, alp, av, am) = self.parse_arm_body();
+                        let (af, al, alp, av, am) = self.parse_arm_body()?;
                         arms.push(MatchArm {
                             case: case_val,
                             fields: af,
@@ -688,7 +705,7 @@ impl<'a> Parser<'a> {
                             if self.current == Token::Colon {
                                 self.advance();
                             }
-                            let cty = self.parse_type();
+                            let cty = self.parse_type()?;
                             if self.current == Token::Eq {
                                 self.advance();
                             }
@@ -752,12 +769,26 @@ impl<'a> Parser<'a> {
                             if self.current == Token::Colon {
                                 self.advance();
                             }
-                            let ty = self.parse_type();
+                            let ty = self.parse_type()?;
+                            let mut conditional = None;
+                            if let Token::Ident(v) = &self.current {
+                                if v == "if" {
+                                    self.advance();
+                                    if let Ok(e) = self.parse_expr() {
+                                        if self.contains_rem(&e) {
+                                            return Err(ParseError::Syntax(
+                                                "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
+                                            ));
+                                        }
+                                        conditional = Some(e);
+                                    }
+                                }
+                            }
                             loop_body.push(Field {
                                 name: fname,
                                 ty,
                                 validate: None,
-                                conditional: None,
+                                conditional,
                                 order: 0,
                                 span: self.field_span(field_start),
                             });
@@ -787,7 +818,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Colon {
                     self.advance();
                 }
-                let ty = self.parse_type();
+                let ty = self.parse_type()?;
                 let mut validate = None;
                 if let Token::Ident(v) = &self.current {
                     if v == "validate" {
@@ -811,6 +842,11 @@ impl<'a> Parser<'a> {
                     if v == "if" {
                         self.advance();
                         if let Ok(e) = self.parse_expr() {
+                            if self.contains_rem(&e) {
+                                return Err(ParseError::Syntax(
+                                    "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
+                                ));
+                            }
                             conditional = Some(e);
                         }
                         while self.current != Token::Semicolon
@@ -841,7 +877,7 @@ impl<'a> Parser<'a> {
         if self.current == Token::RBrace {
             self.advance();
         }
-        (fields, lets, loops, validates, matches)
+        Ok((fields, lets, loops, validates, matches))
     }
 
     pub fn parse_state_machine(&mut self) -> Result<StateMachine, ParseError> {
@@ -1285,7 +1321,7 @@ impl<'a> Parser<'a> {
                                     if self.current == Token::LBrace {
                                         self.advance();
                                     }
-                                    let (af, al, alp, av, am) = self.parse_arm_body();
+                                    let (af, al, alp, av, am) = self.parse_arm_body()?;
                                     arms.push(MatchArm {
                                         case: case_val,
                                         fields: af,
@@ -1363,7 +1399,7 @@ impl<'a> Parser<'a> {
                                         if self.current == Token::Colon {
                                             self.advance();
                                         }
-                                        let cty = self.parse_type();
+                                        let cty = self.parse_type()?;
                                         if self.current == Token::Eq {
                                             self.advance();
                                         }
@@ -1445,13 +1481,27 @@ impl<'a> Parser<'a> {
                                             self.advance();
                                         }
 
-                                        let ty = self.parse_type();
+                                        let ty = self.parse_type()?;
+                                        let mut conditional = None;
+                                        if let Token::Ident(v) = &self.current {
+                                            if v == "if" {
+                                                self.advance();
+                                                if let Ok(e) = self.parse_expr() {
+                                                    if self.contains_rem(&e) {
+                                                        return Err(ParseError::Syntax(
+                                                            "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
+                                                        ));
+                                                    }
+                                                    conditional = Some(e);
+                                                }
+                                            }
+                                        }
 
                                         loop_body.push(Field {
                                             name: fname,
                                             ty,
                                             validate: None,
-                                            conditional: None,
+                                            conditional,
                                             order: 0,
                                             span: self.field_span(field_start),
                                         });
@@ -1487,7 +1537,7 @@ impl<'a> Parser<'a> {
                                 self.advance();
                             }
 
-                            let ty = self.parse_type();
+                            let ty = self.parse_type()?;
 
                             let mut validate = None;
                             if let Token::Ident(v) = &self.current {

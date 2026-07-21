@@ -1,0 +1,8 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+assertion_line: 73
+expression: err
+---
+Syntax(
+    "bitfield width must be in 1..=64, got 0",
+)

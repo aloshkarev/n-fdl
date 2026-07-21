@@ -1,0 +1,23 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+assertion_line: 47
+expression: field_view(src)
+---
+[
+    (
+        "flags",
+        U8,
+        None,
+    ),
+    (
+        "options",
+        Bytes {
+            len: Ident(
+                "flags",
+            ),
+        },
+        Some(
+            "Binary { op: Gt, left: Ident(\"flags\"), right: Int(0) }",
+        ),
+    ),
+]
