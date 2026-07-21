@@ -7,6 +7,8 @@
       "path": ".",
       "file-types": ["nfdl"],
       "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "folds": "queries/folds.scm",
       "injection-regex": "^nfdl$"
     }
   ],

@@ -7,6 +7,8 @@
       "path": ".",
       "file-types": ["adgl"],
       "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "folds": "queries/folds.scm",
       "injection-regex": "^adgl$"
     }
   ],

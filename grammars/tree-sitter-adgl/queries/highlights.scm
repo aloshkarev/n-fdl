@@ -1,4 +1,4 @@
-; Minimal ADGL highlights (IDE track). Expand as editors adopt the grammar.
+; ADGL highlights (IDE track). Expand as editors adopt the grammar.
 
 (line_comment) @comment
 (block_comment) @comment
@@ -8,6 +8,11 @@
 (duration) @number
 (signed_integer) @number
 (boolean) @constant.builtin
+
+[
+  "{" "}" "(" ")" "[" "]"
+  "," "."
+] @punctuation.delimiter
 
 [
   "ruleset"

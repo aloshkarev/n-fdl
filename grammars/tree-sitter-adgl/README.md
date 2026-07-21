@@ -15,3 +15,15 @@ tree-sitter test
 ```
 
 Requires the `tree-sitter` CLI on `PATH`.
+
+## Queries
+
+IDE query packs live in `queries/`:
+
+| File | Purpose |
+|------|---------|
+| `highlights.scm` | Syntax highlighting |
+| `folds.scm` | Fold ruleset/evidence/decision/correlate blocks |
+| `locals.scm` | Local scopes and definitions |
+
+Editor wiring: see [`editors/vscode/readme.md`](../../editors/vscode/readme.md).

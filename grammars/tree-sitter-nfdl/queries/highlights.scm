@@ -1,4 +1,4 @@
-; Minimal N-FDL highlights (IDE track). Expand as editors adopt the grammar.
+; N-FDL highlights (IDE track). Expand as editors adopt the grammar.
 
 (line_comment) @comment
 (block_comment) @comment
@@ -6,6 +6,11 @@
 (string) @string
 (integer) @number
 (boolean) @constant.builtin
+
+[
+  "{" "}" "(" ")" "[" "]"
+  ";" "," "."
+] @punctuation.delimiter
 
 [
   "protocol"
