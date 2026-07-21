@@ -133,6 +133,7 @@ pub fn eval_expr(expr: &Expr, vars: &HashMap<String, u64>) -> u64 {
         Expr::Call { name: _, args: _ } => 0, // bidir_tuple etc handled specially for keys
         Expr::Tuple(_) => 0, // tuples are structural (used in keys), not scalar values
         Expr::Field(_, _) => 0, // resolved at key computation via dotted names
+        Expr::Str(_) => 0, // string literals are not scalar values
     }
 }
 
@@ -334,6 +335,13 @@ fn emit_expr_to_slot(
                     return (s, next_slot);
                 }
             }
+            instructions.push(Instruction::LoadConst {
+                value: 0,
+                dst: next_slot,
+            });
+            (next_slot, next_slot + 1)
+        }
+        Expr::Str(_) => {
             instructions.push(Instruction::LoadConst {
                 value: 0,
                 dst: next_slot,

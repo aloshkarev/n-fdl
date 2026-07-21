@@ -93,6 +93,7 @@ fn expr_to_string(expr: &Expr) -> String {
     match expr {
         Expr::Ident(s) => s.clone(),
         Expr::Int(v) => v.to_string(),
+        Expr::Str(s) => format!("\"{s}\""),
         Expr::Binary { left, op, right } => {
             format!(
                 "{} {} {}",

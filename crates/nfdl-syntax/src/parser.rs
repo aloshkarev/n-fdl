@@ -403,6 +403,11 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Expr::Int(v)
             }
+            Token::String(s) => {
+                let s = s.clone();
+                self.advance();
+                Expr::Str(s)
+            }
             Token::LParen => {
                 self.advance();
                 // Tuple if comma-separated, else grouping.
@@ -870,6 +875,7 @@ impl<'a> Parser<'a> {
 
         let mut states_map: std::collections::HashMap<String, Vec<Transition>> =
             std::collections::HashMap::new();
+        let mut state_order: Vec<String> = Vec::new();
         let mut initial = "IDLE".to_string();
 
         while self.current != Token::RBrace && self.current != Token::Eof {
@@ -999,6 +1005,9 @@ impl<'a> Parser<'a> {
                         self.advance();
                     }
 
+                    if !states_map.contains_key(&state_name) {
+                        state_order.push(state_name.clone());
+                    }
                     states_map.insert(state_name, transitions);
                 } else {
                     self.advance();
@@ -1012,11 +1021,13 @@ impl<'a> Parser<'a> {
             self.advance();
         }
 
-        let states: Vec<State> = states_map
+        let states: Vec<State> = state_order
             .into_iter()
-            .map(|(name, trans)| State {
-                name,
-                transitions: trans,
+            .filter_map(|name| {
+                states_map.remove(&name).map(|trans| State {
+                    name,
+                    transitions: trans,
+                })
             })
             .collect();
 

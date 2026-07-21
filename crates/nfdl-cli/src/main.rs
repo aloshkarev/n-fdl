@@ -20,7 +20,7 @@ fn expr_has_bidir(expr: &Expr) -> bool {
         Expr::Coalesce { value, default } => expr_has_bidir(value) || expr_has_bidir(default),
         Expr::Tuple(elems) => elems.iter().any(expr_has_bidir),
         Expr::Field(base, _) => expr_has_bidir(base),
-        Expr::Ident(_) | Expr::Int(_) => false,
+        Expr::Ident(_) | Expr::Int(_) | Expr::Str(_) => false,
     }
 }
 
@@ -54,7 +54,7 @@ fn expr_has_modulo_padding(expr: &Expr) -> bool {
         Expr::Call { args, .. } => args.iter().any(expr_has_modulo_padding),
         Expr::Tuple(elems) => elems.iter().any(expr_has_modulo_padding),
         Expr::Field(base, _) => expr_has_modulo_padding(base),
-        Expr::Ident(_) | Expr::Int(_) => false,
+        Expr::Ident(_) | Expr::Int(_) | Expr::Str(_) => false,
     }
 }
 

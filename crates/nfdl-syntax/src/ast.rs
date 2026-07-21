@@ -22,6 +22,8 @@ pub enum NfdlType {
 pub enum Expr {
     Ident(String),
     Int(i64),
+    /// String literal (e.g. plugin name in `invoke("dns_decompress", ...)`).
+    Str(String),
     Binary {
         op: BinOp,
         left: Box<Expr>,
