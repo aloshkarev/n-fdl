@@ -8,3 +8,6 @@ nfdl-bytecode = { path = "../nfdl-bytecode" }
 nfdl-vm = { path = "../nfdl-vm" }
 nfdl-syntax = { path = "../nfdl-syntax" }
 bytes = "1"
+
+[dev-dependencies]
+serde_json = "1"
