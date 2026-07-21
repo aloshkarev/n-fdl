@@ -73,11 +73,44 @@ fails (floats are rejected by the parser / units ABI).
 | `ADGLS0100` | warn | Float literal in `.adgl` source (outside comments/strings). Units ABI is i64 — prefer per-mille / centi / ms integer thresholds |
 | `ADGLS0200` | warn | `having: count >= 1` is redundant with the omitted default (empty / no-op having). **Does not** re-emit verify `ADGL0504` (`N = 0`) / `ADGL0505` (`N > 32`) |
 
+## Suppress / deny attributes (Wave 0)
+
+Full grammar attributes are deferred (no AST/`#![…]` parse yet). Until then,
+`ndsl-clippy` honors **file-scoped line-comment directives** with the same
+surface as rustc-style attrs:
+
+| Form | Example |
+|------|---------|
+| Outer attr comment | `// #[allow(NFDL0001)]` |
+| Inner attr comment | `// #![deny(ADGLS0100)]` |
+| Explicit ndsl prefix | `// ndsl:allow(NFDL0001)` / `// ndsl:deny(ADGLS0100)` |
+
+Rules:
+
+- Directives apply to the **whole file** (Wave 0). Decl-scoped attachment is
+  future work once real attribute nodes exist in the parsers.
+- Comma-separated IDs are accepted: `// #[allow(NFDL0001, NFDL0002)]`.
+- `forbid` is an alias for `deny`; `warning` is an alias for `warn`.
+- Later directives for the same ID win.
+- Malformed / non-directive comments are ignored (no parse error).
+- Examples and shipped diagnostics do **not** require attributes.
+
+**Precedence** (highest first):
+
+1. CLI `--allow` / `--deny` (`LintStore::set_level`)
+2. File comment directives (`attrs::parse_file_attrs`)
+3. Lint default level
+
+Real `#[allow(...)]` tokens in the grammar may replace this comment surface in
+a later wave; the ID/level vocabulary will stay the same. See
+[ADR-014](../adr/ADR-014-wave0-lint-attr-directives.md).
+
 ## Implementation
 
 - Types: `crates/ndsl-clippy` (`LintId`, `LintLevel`, `LintDiagnostic`, `LintStore`)
 - Context: `LintContext` carries optional `nfdl: Option<&Protocol>` and `adgl: Option<&Ruleset>` for style packs
 - Driver: `LintStore::lint_paths` / `lint_file` walks `.nfdl` / `.adgl` (directories recurse)
 - Levels: `LintStore::set_level` backs `ndsl-cli lint --allow` / `--deny`
+- File attrs: `attrs::parse_file_attrs` (Wave-0 comment directives) applied per file in `lint_source`
 - Rendering: human via ariadne (`RenderFormat::Human`) + JSON (`--json`)
 - CLI: `ndsl-cli lint [--json] [--allow ID] [--deny ID] <paths...>`

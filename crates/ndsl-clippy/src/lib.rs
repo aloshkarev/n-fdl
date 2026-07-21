@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod adgl;
+mod attrs;
 mod builtin;
 mod nfdl;
 mod render;
@@ -236,10 +237,24 @@ impl LintStore {
         Ok(())
     }
 
-    /// Effective level after CLI / future attribute overrides.
+    /// Effective level after CLI overrides (file attributes applied in [`Self::lint_source`]).
     pub fn effective_level(&self, id: LintId) -> LintLevel {
+        self.effective_level_with(id, None)
+    }
+
+    /// Resolve level: CLI override → optional file attribute → default.
+    fn effective_level_with(
+        &self,
+        id: LintId,
+        file_attrs: Option<&HashMap<String, LintLevel>>,
+    ) -> LintLevel {
         if let Some(level) = self.overrides.get(id.as_str()) {
             return *level;
+        }
+        if let Some(attrs) = file_attrs {
+            if let Some(level) = attrs.get(id.as_str()) {
+                return *level;
+            }
         }
         self.entries
             .get(id.as_str())
@@ -296,7 +311,11 @@ impl LintStore {
     }
 
     /// Run registered checks against an in-memory source (used by tests and CLI).
+    ///
+    /// File-scoped Wave-0 directives (`// #[allow(...)]`, `// ndsl:deny(...)`, …)
+    /// adjust levels for this source; CLI [`Self::set_level`] overrides still win.
     pub fn lint_source(&self, path: &Path, source: &str, lang: LintLang) -> Vec<FileDiagnostic> {
+        let file_attrs = attrs::parse_file_attrs(source);
         // The N-FDL parser accepts EOF as an empty protocol; skip AST attach for
         // blank sources so engine-smoke empty-file stays the only finding.
         let nfdl_ast = match lang {
@@ -320,7 +339,7 @@ impl LintStore {
         keys.sort_unstable();
         for key in keys {
             let entry = &self.entries[key];
-            let level = self.effective_level(entry.def.id);
+            let level = self.effective_level_with(entry.def.id, Some(&file_attrs));
             if level == LintLevel::Allow {
                 continue;
             }
@@ -533,6 +552,77 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].diagnostic.level, LintLevel::Deny);
         assert!(LintStore::has_deny(&diags));
+    }
+
+    fn naming_src_with_directive(directive: &str) -> String {
+        format!(
+            r#"{directive}
+protocol bad_proto {{
+    meta {{ endian = big; mode = datagram; }}
+    message OkMsg {{
+        ok_field: u8;
+    }}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn attr_allow_suppresses_finding() {
+        let mut store = LintStore::new();
+        store.register_builtin();
+        let src = naming_src_with_directive("// #[allow(NFDL0001)]");
+        let diags = store.lint_source(Path::new("t.nfdl"), &src, LintLang::Nfdl);
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.diagnostic.id != NFDL_NAMING_TYPE),
+            "allow(NFDL0001) should suppress naming findings, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn attr_deny_elevates_finding() {
+        let mut store = LintStore::new();
+        store.register_builtin();
+        let src = naming_src_with_directive("// #[deny(NFDL0001)]");
+        let diags = store.lint_source(Path::new("t.nfdl"), &src, LintLang::Nfdl);
+        let naming: Vec<_> = diags
+            .iter()
+            .filter(|d| d.diagnostic.id == NFDL_NAMING_TYPE)
+            .collect();
+        assert!(!naming.is_empty(), "expected NFDL0001 findings, got: {diags:?}");
+        assert!(
+            naming.iter().all(|d| d.diagnostic.level == LintLevel::Deny),
+            "deny(NFDL0001) should elevate to deny, got: {naming:?}"
+        );
+        assert!(LintStore::has_deny(&diags));
+    }
+
+    #[test]
+    fn attr_ndsl_allow_form_also_suppresses() {
+        let mut store = LintStore::new();
+        store.register_builtin();
+        let src = naming_src_with_directive("// ndsl:allow(NFDL0001)");
+        let diags = store.lint_source(Path::new("t.nfdl"), &src, LintLang::Nfdl);
+        assert!(diags.iter().all(|d| d.diagnostic.id != NFDL_NAMING_TYPE));
+    }
+
+    #[test]
+    fn cli_override_wins_over_file_attr() {
+        let mut store = LintStore::new();
+        store.register_builtin();
+        store
+            .set_level(NFDL_NAMING_TYPE.as_str(), LintLevel::Deny)
+            .unwrap();
+        let src = naming_src_with_directive("// #[allow(NFDL0001)]");
+        let diags = store.lint_source(Path::new("t.nfdl"), &src, LintLang::Nfdl);
+        let naming: Vec<_> = diags
+            .iter()
+            .filter(|d| d.diagnostic.id == NFDL_NAMING_TYPE)
+            .collect();
+        assert!(!naming.is_empty());
+        assert!(naming.iter().all(|d| d.diagnostic.level == LintLevel::Deny));
     }
 
     #[test]
