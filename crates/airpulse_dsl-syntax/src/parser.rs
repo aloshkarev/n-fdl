@@ -4,6 +4,7 @@ use std::borrow::Cow;
 
 use airpulse_dsl_types::{ActionKind, ScopeType, Severity};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
+use ndsl_trivia::{Trivia, TriviaKind};
 use winnow::Parser;
 use winnow::error::InputError;
 use winnow::token::take_while;
@@ -180,7 +181,7 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
         ));
     }
 
-    let mut lx = Lexer { src, pos: 0 };
+    let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     let mut depth: usize = 0;
     while !lx.is_eof() {
@@ -218,9 +219,28 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
 struct Lexer<'a> {
     src: &'a str,
     pos: usize,
+    /// Trivia collected while skipping ahead to the most recent token.
+    pending_trivia: Vec<Trivia>,
 }
 
 impl<'a> Lexer<'a> {
+    fn new(src: &'a str) -> Self {
+        Self {
+            src,
+            pos: 0,
+            pending_trivia: Vec::new(),
+        }
+    }
+
+    /// Take trivia collected immediately before the most recent token cycle
+    /// (`skip_ws_and_comments` + `next_token`).
+    ///
+    /// Formatters and AST attach will drain this; unit tests cover the API today.
+    #[allow(dead_code)]
+    fn trivia_before_next_token(&mut self) -> Vec<Trivia> {
+        std::mem::take(&mut self.pending_trivia)
+    }
+
     fn is_eof(&self) -> bool {
         self.pos >= self.src.len()
     }
@@ -241,6 +261,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_ws_and_comments(&mut self) -> Result<(), ParseErr> {
+        self.pending_trivia.clear();
         loop {
             let mut consumed = false;
             while matches!(self.peek_char(), Some(' ' | '\t' | '\r' | '\n')) {
@@ -249,14 +270,22 @@ impl<'a> Lexer<'a> {
             }
             if self.rest().starts_with("//") {
                 consumed = true;
-                while let Some(ch) = self.bump_char() {
+                let start = self.pos;
+                while let Some(ch) = self.peek_char() {
                     if ch == '\n' {
                         break;
                     }
+                    let _ = self.bump_char();
                 }
+                let end = self.pos;
+                self.pending_trivia.push(Trivia {
+                    kind: TriviaKind::LineComment,
+                    span: Span::new(start, end),
+                    text: self.src[start..end].to_owned(),
+                });
             } else if self.rest().starts_with("/*") {
                 consumed = true;
-                let comment_start = self.pos;
+                let start = self.pos;
                 let _ = self.bump_char();
                 let _ = self.bump_char();
                 while !self.is_eof() && !self.rest().starts_with("*/") {
@@ -267,11 +296,17 @@ impl<'a> Lexer<'a> {
                         "ADGL0106",
                         "unclosed block comment",
                         "closing */",
-                        Span::new(comment_start, comment_start + 2),
+                        Span::new(start, start + 2),
                     ));
                 }
                 let _ = self.bump_char();
                 let _ = self.bump_char();
+                let end = self.pos;
+                self.pending_trivia.push(Trivia {
+                    kind: TriviaKind::BlockComment,
+                    span: Span::new(start, end),
+                    text: self.src[start..end].to_owned(),
+                });
             }
             if !consumed {
                 break;
@@ -2023,6 +2058,7 @@ pub fn line_col(src: &str, byte_off: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndsl_trivia::{Span as TriviaSpan, TriviaKind};
 
     #[test]
     fn line_col_handles_utf8_boundaries() {
@@ -2047,5 +2083,43 @@ mod tests {
             tokens.get(2).map(|t| &t.kind),
             Some(TokenKind::Duration(120000))
         ));
+    }
+
+    #[test]
+    fn line_comment_preserved_as_trivia() {
+        let src = "// leading note\nruleset";
+        let mut lexer = Lexer::new(src);
+        lexer.skip_ws_and_comments().unwrap();
+        let tok = lexer.next_token().unwrap();
+        assert!(matches!(tok.kind, TokenKind::Kw("ruleset")));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::LineComment);
+        assert_eq!(trivia[0].text, "// leading note");
+        assert_eq!(trivia[0].span, TriviaSpan::new(0, "// leading note".len()));
+    }
+
+    #[test]
+    fn block_comment_preserved_as_trivia() {
+        let src = "/* block */ruleset";
+        let mut lexer = Lexer::new(src);
+        lexer.skip_ws_and_comments().unwrap();
+        let tok = lexer.next_token().unwrap();
+        assert!(matches!(tok.kind, TokenKind::Kw("ruleset")));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::BlockComment);
+        assert_eq!(trivia[0].text, "/* block */");
+        assert_eq!(trivia[0].span, TriviaSpan::new(0, "/* block */".len()));
+    }
+
+    #[test]
+    fn unclosed_block_comment_still_errors() {
+        let src = "/* unclosed\nruleset";
+        let mut lexer = Lexer::new(src);
+        let err = lexer.skip_ws_and_comments().unwrap_err();
+        assert_eq!(err.code, "ADGL0106");
     }
 }

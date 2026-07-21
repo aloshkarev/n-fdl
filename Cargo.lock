@@ -55,6 +55,7 @@ dependencies = [
  "airpulse_dsl-types",
  "insta",
  "ndsl-diag",
+ "ndsl-trivia",
  "winnow",
 ]
 
