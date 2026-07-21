@@ -1,5 +1,7 @@
 use std::str::Chars;
 
+use ndsl_trivia::{Span, Trivia, TriviaKind};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Protocol,
@@ -54,24 +56,33 @@ pub enum Token {
 }
 
 pub struct Lexer<'a> {
+    input: &'a str,
     chars: Chars<'a>,
+    /// Byte offset into `input`.
     pos: usize,
+    /// Trivia collected while skipping ahead to the most recent token.
+    pending_trivia: Vec<Trivia>,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
+            input,
             chars: input.chars(),
             pos: 0,
+            pending_trivia: Vec::new(),
         }
     }
 
+    /// Take trivia collected immediately before the most recent [`Self::next_token`].
+    pub fn trivia_before_next_token(&mut self) -> Vec<Trivia> {
+        std::mem::take(&mut self.pending_trivia)
+    }
+
     fn bump(&mut self) -> Option<char> {
-        let c = self.chars.next();
-        if c.is_some() {
-            self.pos += 1;
-        }
-        c
+        let c = self.chars.next()?;
+        self.pos += c.len_utf8();
+        Some(c)
     }
 
     fn peek(&self) -> Option<char> {
@@ -85,11 +96,19 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 Some('/') if self.peek_nth(1) == Some('/') => {
+                    let start = self.pos;
                     while self.peek() != Some('\n') && self.peek().is_some() {
                         self.bump();
                     }
+                    let end = self.pos;
+                    self.pending_trivia.push(Trivia {
+                        kind: TriviaKind::LineComment,
+                        span: Span::new(start, end),
+                        text: self.input[start..end].to_owned(),
+                    });
                 }
                 Some('/') if self.peek_nth(1) == Some('*') => {
+                    let start = self.pos;
                     self.bump();
                     self.bump();
                     while !(self.peek() == Some('*') && self.peek_nth(1) == Some('/'))
@@ -99,6 +118,12 @@ impl<'a> Lexer<'a> {
                     }
                     self.bump();
                     self.bump();
+                    let end = self.pos;
+                    self.pending_trivia.push(Trivia {
+                        kind: TriviaKind::BlockComment,
+                        span: Span::new(start, end),
+                        text: self.input[start..end].to_owned(),
+                    });
                 }
                 _ => break,
             }
@@ -110,6 +135,7 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn next_token(&mut self) -> Token {
+        self.pending_trivia.clear();
         self.skip_whitespace_and_comments();
         match self.bump() {
             Some('{') => Token::LBrace,
@@ -278,9 +304,37 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndsl_trivia::{Span, TriviaKind};
+
     #[test]
     fn lex_basic() {
         let mut l = Lexer::new("protocol ARP { message X { a: u8; } }");
         assert!(matches!(l.next_token(), Token::Protocol));
+    }
+
+    #[test]
+    fn line_comment_preserved_as_trivia() {
+        let src = "// leading note\nprotocol";
+        let mut lexer = Lexer::new(src);
+        assert!(matches!(lexer.next_token(), Token::Protocol));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::LineComment);
+        assert_eq!(trivia[0].text, "// leading note");
+        assert_eq!(trivia[0].span, Span::new(0, "// leading note".len()));
+    }
+
+    #[test]
+    fn block_comment_preserved_as_trivia() {
+        let src = "/* block */protocol";
+        let mut lexer = Lexer::new(src);
+        assert!(matches!(lexer.next_token(), Token::Protocol));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::BlockComment);
+        assert_eq!(trivia[0].text, "/* block */");
+        assert_eq!(trivia[0].span, Span::new(0, "/* block */".len()));
     }
 }
