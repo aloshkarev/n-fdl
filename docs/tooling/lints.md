@@ -40,15 +40,19 @@ Parsing accepts case-insensitive `allow`, `warn`/`warning`, and `deny`/`forbid`.
 | `NFDL0001`–`NFDL0099` | Naming conventions (CamelCase, snake_case) |
 | `NFDL0100`–`NFDL0199` | Unused declarations (messages, fields) |
 | `NFDL0200`–`NFDL0299` | Redundant or stub `validate` blocks |
+| `NFDL0900`–`NFDL0909` | Engine-smoke / driver demos (e.g. `NFDL0900` empty file) |
 | `ADGLS0001`–`ADGLS0099` | Unused `correlate` / graph bindings |
 | `ADGLS0100`–`ADGLS0199` | Literal and type hygiene (e.g. float warnings) |
 | `ADGLS0200`–`ADGLS0299` | Empty or suspicious `having` clauses |
 
 Exact lint messages ship with each pack in Wave 3 (`Task 15`–`17` in the
-tooling plan).
+tooling plan). `NFDL0900` is the trivial built-in registered by
+`LintStore::register_builtin` so the driver is exercisable before Tasks 16–17.
 
 ## Implementation
 
 - Types: `crates/ndsl-clippy` (`LintId`, `LintLevel`, `LintDiagnostic`, `LintStore`)
-- Driver wiring: `ndsl-cli lint` (Wave 0 skeleton)
-- Rendering: JSON + ariadne (Wave 3)
+- Driver: `LintStore::lint_paths` / `lint_file` walks `.nfdl` / `.adgl` (directories recurse)
+- Levels: `LintStore::set_level` backs `ndsl-cli lint --allow` / `--deny`
+- Rendering: human via ariadne (`RenderFormat::Human`) + JSON (`--json`)
+- CLI: `ndsl-cli lint [--json] [--allow ID] [--deny ID] <paths...>`

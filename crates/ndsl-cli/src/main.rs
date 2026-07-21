@@ -5,11 +5,12 @@
 #![forbid(unsafe_code)]
 
 use airpulse_dsl_syntax::{parse_ruleset, RuleDecl};
-use ndsl_clippy::LintStore;
+use ndsl_clippy::{render, LintLevel, LintStore, RenderFormat};
 use ndsl_fmt::{format_adgl_source, format_nfdl_source, FormatError};
 use nfdl_syntax::{ParseError, Parser};
 use std::env;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -24,7 +25,7 @@ fn usage() {
         "Usage:\n  \
          ndsl-cli parse <file>\n  \
          ndsl-cli fmt [--check|--write] <paths...>\n  \
-         ndsl-cli lint <paths...>\n  \
+         ndsl-cli lint [--json] [--allow ID] [--deny ID] <paths...>\n  \
          ndsl-cli check <paths...>\n  \
          ndsl-cli run <nfdl> [hex]"
     );
@@ -225,31 +226,67 @@ fn cmd_fmt(mode: FmtMode, paths: &[PathBuf]) -> i32 {
     exit
 }
 
-fn cmd_lint(paths: &[PathBuf]) -> i32 {
+fn cmd_lint(
+    paths: &[PathBuf],
+    format: RenderFormat,
+    allow: &[String],
+    deny: &[String],
+) -> i32 {
     if paths.is_empty() {
         usage();
         return 1;
     }
 
-    // Wave 0: empty LintStore; packs land in Wave 3.
     let mut store = LintStore::new();
     store.register_builtin();
 
-    for path in paths {
-        if detect_lang(path).is_none() {
-            eprintln!(
-                "error: unsupported extension for {} (expected .nfdl or .adgl)",
-                path.display()
-            );
+    for id in allow {
+        if let Err(e) = store.set_level(id, LintLevel::Allow) {
+            eprintln!("error: {e}");
             return 2;
         }
-        if let Err(e) = fs::read_to_string(path) {
-            eprintln!("error: cannot read {}: {e}", path.display());
+    }
+    for id in deny {
+        if let Err(e) = store.set_level(id, LintLevel::Deny) {
+            eprintln!("error: {e}");
             return 2;
         }
     }
 
-    eprintln!("ndsl-cli lint: no lints registered yet (LintStore stub)");
+    let diagnostics = match store.lint_paths(paths) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
+
+    let deny_count = match format {
+        RenderFormat::Human => {
+            // Human reports go to stderr (ariadne style); keep stdout free for piping.
+            match render(&diagnostics, RenderFormat::Human, io::stderr()) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("error: render failed: {e}");
+                    return 2;
+                }
+            }
+        }
+        RenderFormat::Json => match render(&diagnostics, RenderFormat::Json, io::stdout()) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("error: render failed: {e}");
+                return 2;
+            }
+        },
+    };
+
+    if deny_count > 0 || LintStore::has_deny(&diagnostics) {
+        return 1;
+    }
+    if diagnostics.is_empty() && format == RenderFormat::Human {
+        let _ = writeln!(io::stderr(), "lint: ok ({} path(s))", paths.len());
+    }
     0
 }
 
@@ -266,10 +303,23 @@ fn cmd_check(paths: &[PathBuf]) -> i32 {
             exit = code;
             continue;
         }
-        // Stub lint pass (always clean until packs register).
         let mut store = LintStore::new();
         store.register_builtin();
-        let _ = store;
+        match store.lint_paths(&[path.clone()]) {
+            Ok(diags) if LintStore::has_deny(&diags) => {
+                let _ = render(&diags, RenderFormat::Human, io::stderr());
+                exit = 1;
+            }
+            Ok(diags) => {
+                if !diags.is_empty() {
+                    let _ = render(&diags, RenderFormat::Human, io::stderr());
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                exit = 2;
+            }
+        }
     }
     if exit == 0 {
         println!("check: ok ({} path(s))", paths.len());
@@ -404,8 +454,47 @@ fn main() {
             cmd_fmt(mode, &paths)
         }
         "lint" => {
-            let paths: Vec<PathBuf> = args[2..].iter().map(PathBuf::from).collect();
-            cmd_lint(&paths)
+            let rest = &args[2..];
+            let mut format = RenderFormat::Human;
+            let mut allow = Vec::new();
+            let mut deny = Vec::new();
+            let mut paths = Vec::new();
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--json" => format = RenderFormat::Json,
+                    "--allow" => {
+                        i += 1;
+                        let Some(id) = rest.get(i) else {
+                            eprintln!("error: --allow requires a lint id");
+                            usage();
+                            process::exit(1);
+                        };
+                        allow.push(id.clone());
+                    }
+                    "--deny" => {
+                        i += 1;
+                        let Some(id) = rest.get(i) else {
+                            eprintln!("error: --deny requires a lint id");
+                            usage();
+                            process::exit(1);
+                        };
+                        deny.push(id.clone());
+                    }
+                    "-h" | "--help" => {
+                        usage();
+                        process::exit(0);
+                    }
+                    flag if flag.starts_with('-') => {
+                        eprintln!("error: unknown flag {flag}");
+                        usage();
+                        process::exit(1);
+                    }
+                    path => paths.push(PathBuf::from(path)),
+                }
+                i += 1;
+            }
+            cmd_lint(&paths, format, &allow, &deny)
         }
         "check" => {
             let paths: Vec<PathBuf> = args[2..].iter().map(PathBuf::from).collect();

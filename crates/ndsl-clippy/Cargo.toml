@@ -5,4 +5,5 @@ edition = "2024"
 rust-version = "1.85"
 
 [dependencies]
+ariadne = { workspace = true }
 ndsl-diag = { path = "../ndsl-diag" }
