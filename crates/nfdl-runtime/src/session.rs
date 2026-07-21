@@ -48,21 +48,24 @@ impl SessionDb {
     }
 
     /// Evict the least-recently-used session (smallest `last_access`).
-    fn evict_lru(&mut self) {
-        if let Some((lru_key, _)) = self
+    /// Returns the evicted key, if any.
+    fn evict_lru(&mut self) -> Option<FlowKey> {
+        let lru_key = self
             .sessions
             .iter()
             .min_by_key(|(_, s)| s.last_access)
-            .map(|(k, _)| (k.clone(), ()))
-        {
-            self.sessions.remove(&lru_key);
-        }
+            .map(|(k, _)| k.clone())?;
+        self.sessions.remove(&lru_key);
+        Some(lru_key)
     }
 
-    pub fn get_or_create(&mut self, key: FlowKey) -> &mut SessionContext {
+    /// Get or create a session. When capacity is exceeded for a new key, LRU-evicts
+    /// one session and returns that key in the second tuple element.
+    pub fn get_or_create(&mut self, key: FlowKey) -> (&mut SessionContext, Option<FlowKey>) {
         let now = self.bump();
+        let mut evicted = None;
         if self.sessions.len() >= self.max_sessions && !self.sessions.contains_key(&key) {
-            self.evict_lru();
+            evicted = self.evict_lru();
         }
         let sess = self.sessions.entry(key).or_insert(SessionContext {
             state: 0,
@@ -70,7 +73,7 @@ impl SessionDb {
             last_access: now,
         });
         sess.last_access = now;
-        sess
+        (sess, evicted)
     }
 
     pub fn transition(&mut self, key: &FlowKey, new_state: u32, var: Option<(String, u64)>) {
@@ -112,12 +115,13 @@ mod tests {
     #[test]
     fn lru_eviction_at_capacity() {
         let mut db = SessionDb::new(2);
-        db.get_or_create(key(1));
-        db.get_or_create(key(2));
+        assert!(db.get_or_create(key(1)).1.is_none());
+        assert!(db.get_or_create(key(2)).1.is_none());
         // Access key(1) to make key(2) the LRU.
         db.get_or_create(key(1));
         // Inserting a third, distinct key evicts the LRU (key 2).
-        db.get_or_create(key(3));
+        let (_, evicted) = db.get_or_create(key(3));
+        assert_eq!(evicted, Some(key(2)));
         assert_eq!(db.len(), 2);
         assert!(!db.sessions.contains_key(&key(2)));
         assert!(db.sessions.contains_key(&key(1)));

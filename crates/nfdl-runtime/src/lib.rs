@@ -18,7 +18,7 @@ pub use continuation::{
     parse_stream_start, parse_stream_start_with_limits, resume, CompleteParse, StreamContinuation,
     StreamParseStep,
 };
-pub use efsm::FsmEngine;
+pub use efsm::{FiredTimer, FsmEngine};
 pub use error::RuntimeError;
 pub use event_bus::{Event, EventBus, EventSink, VecSink};
 pub use integration::{
