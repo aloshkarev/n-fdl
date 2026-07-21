@@ -334,6 +334,7 @@ name = "nfdl-runtime"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "nfdl-bytecode",
  "nfdl-syntax",
 ]
 

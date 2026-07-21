@@ -37,6 +37,7 @@ ndsl-fmt = { path = "crates/ndsl-fmt" }
 ndsl-trivia = { path = "crates/ndsl-trivia" }
 ndsl-clippy = { path = "crates/ndsl-clippy" }
 ndsl-cli = { path = "crates/ndsl-cli" }
+nfdl-bytecode = { path = "crates/nfdl-bytecode" }
 dashmap = "6"
 winnow = "0.7"
 insta = "1"
