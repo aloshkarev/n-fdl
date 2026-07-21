@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod builtin;
+mod nfdl;
 mod render;
 
 use std::collections::{HashMap, HashSet};
@@ -17,7 +18,13 @@ use std::str::FromStr;
 
 pub use builtin::NFDL_EMPTY_FILE;
 pub use ndsl_diag::Span;
+pub use nfdl::{
+    NFDL_NAMING_FIELD, NFDL_NAMING_TYPE, NFDL_REDUNDANT_VALIDATE, NFDL_UNUSED_FIELD,
+    NFDL_UNUSED_MESSAGE,
+};
 pub use render::{render, RenderFormat};
+use nfdl_syntax::ast::Protocol;
+use nfdl_syntax::Parser;
 
 /// Stable lint identifier (e.g. `NFDL0001`, `ADGLS0042`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -119,11 +126,16 @@ pub enum LintLang {
 }
 
 /// Context passed to each registered lint check.
+///
+/// For `.nfdl` files that parse successfully, [`Self::nfdl`] holds the Rust AST
+/// (canonical parser — not tree-sitter). Parse failures leave it `None` so
+/// style packs can no-op without blocking the driver.
 #[derive(Debug)]
 pub struct LintContext<'a> {
     pub path: &'a Path,
     pub source: &'a str,
     pub lang: LintLang,
+    pub nfdl: Option<&'a Protocol>,
 }
 
 /// Static metadata for a registered lint.
@@ -204,7 +216,7 @@ impl LintStore {
         self.entries.insert(key, LintEntry { def, check });
     }
 
-    /// Register built-in N-FDL and ADGL lint packs (demo engine-smoke for now).
+    /// Register built-in N-FDL style pack + engine-smoke lint.
     pub fn register_builtin(&mut self) {
         builtin::register_builtins(self);
     }
@@ -279,10 +291,17 @@ impl LintStore {
 
     /// Run registered checks against an in-memory source (used by tests and CLI).
     pub fn lint_source(&self, path: &Path, source: &str, lang: LintLang) -> Vec<FileDiagnostic> {
+        // The N-FDL parser accepts EOF as an empty protocol; skip AST attach for
+        // blank sources so engine-smoke empty-file stays the only finding.
+        let nfdl_ast = match lang {
+            LintLang::Nfdl if !source.trim().is_empty() => Parser::new(source).parse_protocol().ok(),
+            _ => None,
+        };
         let ctx = LintContext {
             path,
             source,
             lang,
+            nfdl: nfdl_ast.as_ref(),
         };
         let mut out = Vec::new();
         // Stable order by lint id for deterministic output.
@@ -466,11 +485,13 @@ mod tests {
     fn lint_store_register_builtin_registers_demo() {
         let mut store = LintStore::new();
         store.register_builtin();
-        assert_eq!(store.len(), 1);
+        // N-FDL pack (5) + engine-smoke NFDL0900.
+        assert_eq!(store.len(), 6);
         assert_eq!(
             store.effective_level(NFDL_EMPTY_FILE),
             LintLevel::Warn
         );
+        assert_eq!(store.effective_level(NFDL_NAMING_TYPE), LintLevel::Warn);
     }
 
     #[test]
@@ -547,7 +568,7 @@ mod tests {
     fn lint_store_rejects_unknown_level_override() {
         let mut store = LintStore::new();
         store.register_builtin();
-        let err = store.set_level("NFDL0001", LintLevel::Deny).unwrap_err();
+        let err = store.set_level("NFDL0999", LintLevel::Deny).unwrap_err();
         assert!(matches!(err, WalkError::UnknownLint(_)));
     }
 

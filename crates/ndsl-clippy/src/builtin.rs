@@ -1,8 +1,6 @@
 //! Built-in lint packs registered by [`crate::LintStore::register_builtin`].
-//!
-//! Real N-FDL / ADGL style packs land in later tasks. This module ships one
-//! trivial engine-smoke lint so `ndsl lint` exercises the driver.
 
+use crate::nfdl;
 use crate::{LintCheck, LintContext, LintDef, LintDiagnostic, LintId, LintLevel, LintStore};
 use ndsl_diag::Span;
 
@@ -12,6 +10,7 @@ use ndsl_diag::Span;
 pub const NFDL_EMPTY_FILE: LintId = LintId::new("NFDL0900");
 
 pub fn register_builtins(store: &mut LintStore) {
+    nfdl::register_nfdl_pack(store);
     store.register(
         LintDef {
             id: NFDL_EMPTY_FILE,
