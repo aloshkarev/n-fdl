@@ -8,7 +8,7 @@
 mod builtin;
 mod render;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -241,18 +241,31 @@ impl LintStore {
     /// Walk `paths` (files or directories), run all registered lints, collect findings.
     ///
     /// Allowed findings are omitted. Directory paths are walked recursively for
-    /// `.nfdl` / `.adgl` files.
+    /// `.nfdl` / `.adgl` files. Nested discovery IO failures (broken symlinks,
+    /// permission gaps, TOCTOU) are skipped with a warning; explicit user paths
+    /// that cannot be read still return [`WalkError`].
     pub fn lint_paths(&self, paths: &[PathBuf]) -> Result<Vec<FileDiagnostic>, WalkError> {
         let mut files = Vec::new();
+        let mut explicit_files = HashSet::new();
         for path in paths {
+            let is_dir = path.is_dir();
             collect_targets(path, &mut files)?;
+            if !is_dir {
+                explicit_files.insert(path.clone());
+            }
         }
         files.sort();
         files.dedup();
 
         let mut out = Vec::new();
         for path in files {
-            out.extend(self.lint_file(&path)?);
+            match self.lint_file(&path) {
+                Ok(diags) => out.extend(diags),
+                Err(WalkError::Io(p, e)) if !explicit_files.contains(&path) => {
+                    eprintln!("warning: skipping {}: {e}", p.display());
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(out)
     }
@@ -326,13 +339,37 @@ fn collect_targets_inner(
     out: &mut Vec<PathBuf>,
     require_lang: bool,
 ) -> Result<(), WalkError> {
-    let meta = fs::metadata(path).map_err(|e| WalkError::Io(path.to_path_buf(), e))?;
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if !require_lang => {
+            eprintln!("warning: skipping {}: {e}", path.display());
+            return Ok(());
+        }
+        Err(e) => return Err(WalkError::Io(path.to_path_buf(), e)),
+    };
     if meta.is_dir() {
-        let entries = fs::read_dir(path).map_err(|e| WalkError::Io(path.to_path_buf(), e))?;
+        let entries = match fs::read_dir(path) {
+            Ok(e) => e,
+            Err(e) if !require_lang => {
+                eprintln!("warning: skipping {}: {e}", path.display());
+                return Ok(());
+            }
+            Err(e) => return Err(WalkError::Io(path.to_path_buf(), e)),
+        };
         for entry in entries {
-            let entry = entry.map_err(|e| WalkError::Io(path.to_path_buf(), e))?;
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    // Entry iteration failures are always nested relative to `path`.
+                    eprintln!(
+                        "warning: skipping unreadable entry under {}: {e}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
             // Nested files with other extensions are skipped; only top-level
-            // explicit paths must be .nfdl / .adgl.
+            // explicit paths must be .nfdl / .adgl. Nested IO errors soft-fail.
             collect_targets_inner(&entry.path(), out, /*require_lang=*/ false)?;
         }
         return Ok(());
@@ -528,5 +565,45 @@ mod tests {
         assert!(matches!(err, WalkError::Unsupported(_)));
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lint_store_walk_skips_broken_symlink_nested() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ndsl-clippy-symlink-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.adgl");
+        fs::write(&empty, "").unwrap();
+        fs::write(dir.join("ok.nfdl"), "protocol P {}\n").unwrap();
+        symlink("missing-target-does-not-exist", dir.join("broken.nfdl")).unwrap();
+
+        let mut store = LintStore::new();
+        store.register_builtin();
+        let diags = store.lint_paths(&[dir.clone()]).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].path, empty);
+        assert_eq!(diags[0].diagnostic.id, NFDL_EMPTY_FILE);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lint_store_hard_errors_on_missing_explicit_path() {
+        let path = std::env::temp_dir().join(format!(
+            "ndsl-clippy-missing-{}.nfdl",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+
+        let mut store = LintStore::new();
+        store.register_builtin();
+        let err = store.lint_paths(&[path]).unwrap_err();
+        assert!(matches!(err, WalkError::Io(_, _)));
     }
 }
