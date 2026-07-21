@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod adgl;
 mod builtin;
 mod nfdl;
 mod render;
@@ -16,6 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+pub use adgl::{ADGLS_EMPTY_HAVING, ADGLS_FLOAT_LITERAL, ADGLS_UNUSED_CORRELATE};
 pub use builtin::NFDL_EMPTY_FILE;
 pub use ndsl_diag::Span;
 pub use nfdl::{
@@ -23,6 +25,8 @@ pub use nfdl::{
     NFDL_UNUSED_MESSAGE,
 };
 pub use render::{render, RenderFormat};
+use airpulse_dsl_syntax::ast::Ruleset;
+use airpulse_dsl_syntax::parse_ruleset;
 use nfdl_syntax::ast::Protocol;
 use nfdl_syntax::Parser;
 
@@ -127,15 +131,17 @@ pub enum LintLang {
 
 /// Context passed to each registered lint check.
 ///
-/// For `.nfdl` files that parse successfully, [`Self::nfdl`] holds the Rust AST
-/// (canonical parser — not tree-sitter). Parse failures leave it `None` so
-/// style packs can no-op without blocking the driver.
+/// For `.nfdl` / `.adgl` files that parse successfully, [`Self::nfdl`] /
+/// [`Self::adgl`] hold the Rust AST (canonical parsers — not tree-sitter).
+/// Parse failures leave them `None` so style packs can no-op without blocking
+/// the driver (except source-scan lints such as float hygiene).
 #[derive(Debug)]
 pub struct LintContext<'a> {
     pub path: &'a Path,
     pub source: &'a str,
     pub lang: LintLang,
     pub nfdl: Option<&'a Protocol>,
+    pub adgl: Option<&'a Ruleset<'a>>,
 }
 
 /// Static metadata for a registered lint.
@@ -216,7 +222,7 @@ impl LintStore {
         self.entries.insert(key, LintEntry { def, check });
     }
 
-    /// Register built-in N-FDL style pack + engine-smoke lint.
+    /// Register built-in N-FDL + ADGL style packs and engine-smoke lint.
     pub fn register_builtin(&mut self) {
         builtin::register_builtins(self);
     }
@@ -297,11 +303,16 @@ impl LintStore {
             LintLang::Nfdl if !source.trim().is_empty() => Parser::new(source).parse_protocol().ok(),
             _ => None,
         };
+        let adgl_ast = match lang {
+            LintLang::Adgl if !source.trim().is_empty() => parse_ruleset(source).ok(),
+            _ => None,
+        };
         let ctx = LintContext {
             path,
             source,
             lang,
             nfdl: nfdl_ast.as_ref(),
+            adgl: adgl_ast.as_ref(),
         };
         let mut out = Vec::new();
         // Stable order by lint id for deterministic output.
@@ -485,13 +496,17 @@ mod tests {
     fn lint_store_register_builtin_registers_demo() {
         let mut store = LintStore::new();
         store.register_builtin();
-        // N-FDL pack (5) + engine-smoke NFDL0900.
-        assert_eq!(store.len(), 6);
+        // N-FDL pack (5) + ADGL pack (3) + engine-smoke NFDL0900.
+        assert_eq!(store.len(), 9);
         assert_eq!(
             store.effective_level(NFDL_EMPTY_FILE),
             LintLevel::Warn
         );
         assert_eq!(store.effective_level(NFDL_NAMING_TYPE), LintLevel::Warn);
+        assert_eq!(
+            store.effective_level(ADGLS_UNUSED_CORRELATE),
+            LintLevel::Warn
+        );
     }
 
     #[test]

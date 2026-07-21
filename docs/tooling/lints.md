@@ -60,12 +60,23 @@ canonical Rust parser (`nfdl-syntax`) succeeds; tree-sitter is not used.
 | `NFDL0200` | warn | Validate is a constant (`true`/`false`/int), structural tautology (`x == x`), or has an empty message string |
 | `NFDL0900` | warn | Source file is empty or whitespace-only (engine-smoke; kept for driver demos) |
 
-ADGL style packs (`ADGLS####`) ship in Task 17.
+## Shipped ADGL lints (Task 17)
+
+Registered by `LintStore::register_builtin` → `adgl::register_adgl_pack`.
+AST-backed checks use `airpulse_dsl_syntax::parse_ruleset` (canonical Rust
+parser — not tree-sitter). Float hygiene scans `.adgl` source even when parse
+fails (floats are rejected by the parser / units ABI).
+
+| ID | Default | Message / rule |
+|----|---------|----------------|
+| `ADGLS0001` | warn | Correlate binding is never referenced outside its own `topo`/`time` — **`present()` / `absent()` and `infer`/`emit`/`action` evidence lists count as uses** (no false positive when the binding appears only there) |
+| `ADGLS0100` | warn | Float literal in `.adgl` source (outside comments/strings). Units ABI is i64 — prefer per-mille / centi / ms integer thresholds |
+| `ADGLS0200` | warn | `having: count >= 1` is redundant with the omitted default (empty / no-op having). **Does not** re-emit verify `ADGL0504` (`N = 0`) / `ADGL0505` (`N > 32`) |
 
 ## Implementation
 
 - Types: `crates/ndsl-clippy` (`LintId`, `LintLevel`, `LintDiagnostic`, `LintStore`)
-- Context: `LintContext` carries optional `nfdl: Option<&Protocol>` for style packs
+- Context: `LintContext` carries optional `nfdl: Option<&Protocol>` and `adgl: Option<&Ruleset>` for style packs
 - Driver: `LintStore::lint_paths` / `lint_file` walks `.nfdl` / `.adgl` (directories recurse)
 - Levels: `LintStore::set_level` backs `ndsl-cli lint --allow` / `--deny`
 - Rendering: human via ariadne (`RenderFormat::Human`) + JSON (`--json`)

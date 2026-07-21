@@ -1,5 +1,6 @@
 //! Built-in lint packs registered by [`crate::LintStore::register_builtin`].
 
+use crate::adgl;
 use crate::nfdl;
 use crate::{LintCheck, LintContext, LintDef, LintDiagnostic, LintId, LintLevel, LintStore};
 use ndsl_diag::Span;
@@ -11,6 +12,7 @@ pub const NFDL_EMPTY_FILE: LintId = LintId::new("NFDL0900");
 
 pub fn register_builtins(store: &mut LintStore) {
     nfdl::register_nfdl_pack(store);
+    adgl::register_adgl_pack(store);
     store.register(
         LintDef {
             id: NFDL_EMPTY_FILE,

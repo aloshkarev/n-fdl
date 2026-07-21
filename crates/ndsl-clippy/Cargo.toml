@@ -6,5 +6,6 @@ rust-version = "1.85"
 
 [dependencies]
 ariadne = { workspace = true }
+airpulse_dsl-syntax = { path = "../airpulse_dsl-syntax" }
 ndsl-diag = { path = "../ndsl-diag" }
 nfdl-syntax = { path = "../nfdl-syntax" }
