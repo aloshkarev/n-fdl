@@ -8,6 +8,7 @@ members = [
     "crates/airpulse_dsl-syntax",
     "crates/airpulse_dsl-types",
     "crates/ndsl-diag",
+    "crates/ndsl-fmt",
     "crates/ndsl-trivia",
     "crates/ndsl-clippy",
     "crates/nfdl-fuzz",
@@ -31,6 +32,7 @@ authors = ["Aleksandr Loshkarev <mailbox@aloshkarev.com>"]
 
 [workspace.dependencies]
 ndsl-diag = { path = "crates/ndsl-diag" }
+ndsl-fmt = { path = "crates/ndsl-fmt" }
 ndsl-trivia = { path = "crates/ndsl-trivia" }
 ndsl-clippy = { path = "crates/ndsl-clippy" }
 dashmap = "6"
