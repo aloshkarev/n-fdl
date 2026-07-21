@@ -1,8 +1,10 @@
 # ADGL — AirPulse Diagnostic Graph Language
 
+> **Historical / idea archive.** Spec and ADR prose under `docs/idea/` predates the AirPulse production path. **Shipped runtime:** AirPulse loads verified `.adgl` rulesets from `data/diagnostics/` via `airpulse_dsl-*` path deps (`DiagnosisEngine::Adgl`). Do not treat “idea / proposed” wording below as current product status.
+
 **ADGL** (`.adgl`) — декларативный предметно-ориентированный язык для диагностических правил над потоковым направленным ациклическим графом свойств (Core Diagnostic Graph Model, V1). Вторая DSL в репозитории, параллельная N-FDL ([`docs/`](../)): N-FDL описывает бинарные протоколы (разбор → VM байткода → EFSM), ADGL — причинно-следственную диагностику сетевых сбоев (приём событий → разбиение → отметка прогресса → корреляция → вывод/генерация).
 
-> Статус: **idea / proposed**. Это спецификация и архитектурный проспект, не реализация. Ссылки на код (`airpulse_dsl::*`) проектные; пакеты (crates) появятся после принятия плана миграции ([plans/migration-from-flat-toml.md](plans/migration-from-flat-toml.md)).
+> Статус исходного проспекта: **idea archive**. Реализация crates `airpulse_dsl::*` и интеграция в AirPulse — **shipped** (см. баннер выше).
 
 ## Назначение
 
