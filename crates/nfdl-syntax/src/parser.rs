@@ -6,7 +6,10 @@
 
 use crate::ast::*;
 use crate::lexer::{Lexer, Token};
-use ndsl_trivia::Span;
+use ndsl_diag::{DiagBuffer, Diagnostic, Span};
+
+/// Stable diagnostic code for N-FDL syntax / recovery errors.
+const NFD_SYNTAX: &str = "NFD0100";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
@@ -21,6 +24,9 @@ pub struct Parser<'a> {
     current_span: Span,
     /// Span of the token immediately before [`Self::current`].
     prev_span: Span,
+    /// When true, statement-level errors are recorded and parsing continues after resync.
+    recover: bool,
+    diags: DiagBuffer,
 }
 
 impl<'a> Parser<'a> {
@@ -33,6 +39,8 @@ impl<'a> Parser<'a> {
             current,
             current_span,
             prev_span: Span::unknown(),
+            recover: false,
+            diags: DiagBuffer::new(),
         }
     }
 
@@ -51,6 +59,102 @@ impl<'a> Parser<'a> {
             self.prev_span.end
         };
         Span::new(start, end)
+    }
+
+    fn record_error(&mut self, err: &ParseError) {
+        let (msg, span) = match err {
+            ParseError::Syntax(msg) => (msg.clone(), self.current_span),
+            ParseError::WithLocation { msg, pos } => {
+                (msg.clone(), Span::new(*pos, (*pos).saturating_add(1)))
+            }
+        };
+        self.diags
+            .push(Diagnostic::error(NFD_SYNTAX, msg, span));
+    }
+
+    /// Sync to the next statement/top-level boundary: `;` (consumed), or leave
+    /// the cursor on `}` / a sync keyword for the caller to handle.
+    fn resync_statement(&mut self) {
+        loop {
+            match &self.current {
+                Token::Eof => break,
+                Token::Semicolon => {
+                    self.advance();
+                    break;
+                }
+                Token::RBrace
+                | Token::Message
+                | Token::Meta
+                | Token::Bind
+                | Token::Protocol
+                | Token::Validate => break,
+                Token::Ident(s)
+                    if matches!(
+                        s.as_str(),
+                        "state_machine" | "let" | "loop" | "match" | "next" | "carry"
+                    ) =>
+                {
+                    break;
+                }
+                _ => self.advance(),
+            }
+        }
+    }
+
+    /// Record + resync on recovery; otherwise propagate.
+    /// `Ok(None)` means the caller should `continue` the surrounding statement loop.
+    fn recover_stmt<T>(&mut self, result: Result<T, ParseError>) -> Result<Option<T>, ParseError> {
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => {
+                if self.recover {
+                    self.record_error(&e);
+                    self.resync_statement();
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Like [`Self::recover_stmt`] for pure rejection (no value).
+    /// Returns `Ok(true)` when recovered (caller should `continue`).
+    fn recover_reject(&mut self, err: ParseError) -> Result<bool, ParseError> {
+        if self.recover {
+            self.record_error(&err);
+            self.resync_statement();
+            Ok(true)
+        } else {
+            Err(err)
+        }
+    }
+
+    /// Parse a protocol, collecting all statement-level syntax diagnostics.
+    ///
+    /// On errors inside message/protocol bodies the parser records a diagnostic,
+    /// resyncs to `;` / `}` / a sync keyword, and continues so later errors appear
+    /// in the same [`DiagBuffer`].
+    pub fn parse_protocol_with_diagnostics(&mut self) -> (Protocol, DiagBuffer) {
+        self.recover = true;
+        self.diags = DiagBuffer::new();
+        let proto = match self.parse_protocol() {
+            Ok(p) => p,
+            Err(e) => {
+                self.record_error(&e);
+                Protocol {
+                    name: String::new(),
+                    endian: "big".to_string(),
+                    mode: "datagram".to_string(),
+                    eof: String::new(),
+                    messages: vec![],
+                    binds: vec![],
+                    state_machines: vec![],
+                }
+            }
+        };
+        self.recover = false;
+        (proto, std::mem::take(&mut self.diags))
     }
 
     fn contains_rem(&self, expr: &Expr) -> bool {
@@ -517,6 +621,11 @@ impl<'a> Parser<'a> {
                         let v = *v;
                         self.advance();
                         if !(1..=64).contains(&v) {
+                            // Leave cursor after the bitfield construct so statement
+                            // recovery can sync on `;` instead of the type's `}`.
+                            if self.current == Token::RBrace {
+                                self.advance();
+                            }
                             return Err(ParseError::Syntax(format!(
                                 "bitfield width must be in 1..=64, got {v}"
                             )));
@@ -524,6 +633,9 @@ impl<'a> Parser<'a> {
                         v as u8
                     }
                     _ => {
+                        if self.current == Token::RBrace {
+                            self.advance();
+                        }
                         return Err(ParseError::Syntax(
                             "expected INT bit width in bitfield{k}".into(),
                         ));
@@ -636,7 +748,10 @@ impl<'a> Parser<'a> {
                         if self.current == Token::LBrace {
                             self.advance();
                         }
-                        let (af, al, alp, av, am) = self.parse_arm_body()?;
+                        let arm = self.parse_arm_body();
+                        let Some((af, al, alp, av, am)) = self.recover_stmt(arm)? else {
+                            continue;
+                        };
                         arms.push(MatchArm {
                             case: case_val,
                             fields: af,
@@ -705,7 +820,10 @@ impl<'a> Parser<'a> {
                             if self.current == Token::Colon {
                                 self.advance();
                             }
-                            let cty = self.parse_type()?;
+                            let cty_r = self.parse_type();
+                            let Some(cty) = self.recover_stmt(cty_r)? else {
+                                continue;
+                            };
                             if self.current == Token::Eq {
                                 self.advance();
                             }
@@ -769,16 +887,24 @@ impl<'a> Parser<'a> {
                             if self.current == Token::Colon {
                                 self.advance();
                             }
-                            let ty = self.parse_type()?;
+                            let ty_r = self.parse_type();
+                            let Some(ty) = self.recover_stmt(ty_r)? else {
+                                continue;
+                            };
                             let mut conditional = None;
                             if let Token::Ident(v) = &self.current {
                                 if v == "if" {
                                     self.advance();
-                                    let e = self.parse_expr()?;
+                                    let e_r = self.parse_expr();
+                                    let Some(e) = self.recover_stmt(e_r)? else {
+                                        continue;
+                                    };
                                     if self.contains_rem(&e) {
-                                        return Err(ParseError::Syntax(
+                                        if self.recover_reject(ParseError::Syntax(
                                             "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                                        ));
+                                        ))? {
+                                            continue;
+                                        }
                                     }
                                     conditional = Some(e);
                                 }
@@ -817,7 +943,10 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Colon {
                     self.advance();
                 }
-                let ty = self.parse_type()?;
+                let ty_r = self.parse_type();
+                let Some(ty) = self.recover_stmt(ty_r)? else {
+                    continue;
+                };
                 let mut validate = None;
                 if let Token::Ident(v) = &self.current {
                     if v == "validate" {
@@ -840,11 +969,16 @@ impl<'a> Parser<'a> {
                 if let Token::Ident(v) = &self.current {
                     if v == "if" {
                         self.advance();
-                        let e = self.parse_expr()?;
+                        let e_r = self.parse_expr();
+                        let Some(e) = self.recover_stmt(e_r)? else {
+                            continue;
+                        };
                         if self.contains_rem(&e) {
-                            return Err(ParseError::Syntax(
+                            if self.recover_reject(ParseError::Syntax(
                                 "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                            ));
+                            ))? {
+                                continue;
+                            }
                         }
                         conditional = Some(e);
                         while self.current != Token::Semicolon
@@ -1319,7 +1453,10 @@ impl<'a> Parser<'a> {
                                     if self.current == Token::LBrace {
                                         self.advance();
                                     }
-                                    let (af, al, alp, av, am) = self.parse_arm_body()?;
+                                    let arm = self.parse_arm_body();
+                                    let Some((af, al, alp, av, am)) = self.recover_stmt(arm)? else {
+                                        continue;
+                                    };
                                     arms.push(MatchArm {
                                         case: case_val,
                                         fields: af,
@@ -1397,7 +1534,10 @@ impl<'a> Parser<'a> {
                                         if self.current == Token::Colon {
                                             self.advance();
                                         }
-                                        let cty = self.parse_type()?;
+                                        let cty_r = self.parse_type();
+                                        let Some(cty) = self.recover_stmt(cty_r)? else {
+                                            continue;
+                                        };
                                         if self.current == Token::Eq {
                                             self.advance();
                                         }
@@ -1479,16 +1619,24 @@ impl<'a> Parser<'a> {
                                             self.advance();
                                         }
 
-                                        let ty = self.parse_type()?;
+                                        let ty_r = self.parse_type();
+                                        let Some(ty) = self.recover_stmt(ty_r)? else {
+                                            continue;
+                                        };
                                         let mut conditional = None;
                                         if let Token::Ident(v) = &self.current {
                                             if v == "if" {
                                                 self.advance();
-                                                let e = self.parse_expr()?;
+                                                let e_r = self.parse_expr();
+                                                let Some(e) = self.recover_stmt(e_r)? else {
+                                                    continue;
+                                                };
                                                 if self.contains_rem(&e) {
-                                                    return Err(ParseError::Syntax(
+                                                    if self.recover_reject(ParseError::Syntax(
                                                         "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                                                    ));
+                                                    ))? {
+                                                        continue;
+                                                    }
                                                 }
                                                 conditional = Some(e);
                                             }
@@ -1514,7 +1662,9 @@ impl<'a> Parser<'a> {
                                 }
 
                                 if self.contains_rem(&condition) {
-                                    return Err(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in loop while condition (see spec 05-verification)".into()));
+                                    if self.recover_reject(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in loop while condition (see spec 05-verification)".into()))? {
+                                        continue;
+                                    }
                                 }
                                 let o = body_seq;
                                 body_seq += 1;
@@ -1534,7 +1684,10 @@ impl<'a> Parser<'a> {
                                 self.advance();
                             }
 
-                            let ty = self.parse_type()?;
+                            let ty_r = self.parse_type();
+                            let Some(ty) = self.recover_stmt(ty_r)? else {
+                                continue;
+                            };
 
                             let mut validate = None;
                             if let Token::Ident(v) = &self.current {
@@ -1579,9 +1732,14 @@ impl<'a> Parser<'a> {
                             if let Token::Ident(v) = &self.current {
                                 if v == "if" {
                                     self.advance();
-                                    let e = self.parse_expr()?;
+                                    let e_r = self.parse_expr();
+                                    let Some(e) = self.recover_stmt(e_r)? else {
+                                        continue;
+                                    };
                                     if self.contains_rem(&e) {
-                                        return Err(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into()));
+                                        if self.recover_reject(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into()))? {
+                                            continue;
+                                        }
                                     }
                                     conditional = Some(e);
                                     while self.current != Token::Semicolon

@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 
 [dependencies]
+ndsl-diag = { workspace = true }
 ndsl-trivia = { workspace = true }
 
 [dev-dependencies]

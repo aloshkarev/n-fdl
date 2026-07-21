@@ -342,6 +342,7 @@ name = "nfdl-syntax"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "ndsl-diag",
  "ndsl-trivia",
 ]
 
