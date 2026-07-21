@@ -39,3 +39,20 @@ jobs:
         with:
           toolchain: "1.85"
       - run: cargo test --workspace
+
+  grammar-conformance:
+    name: grammar conformance (Rust ↔ tree-sitter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # tree-sitter CLI for IDE-track parse checks (not used by verify/runtime)
+      - name: Install tree-sitter CLI
+        run: npm install -g tree-sitter-cli@^0.25.0
+      - name: Check grammar conformance
+        run: ./scripts/check_grammar_conformance.sh
