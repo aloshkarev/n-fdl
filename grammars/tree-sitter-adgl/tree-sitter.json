@@ -1,0 +1,30 @@
+{
+  "grammars": [
+    {
+      "name": "adgl",
+      "camelcase": "Adgl",
+      "scope": "source.adgl",
+      "path": ".",
+      "file-types": ["adgl"],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^adgl$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "ADGL grammar for tree-sitter (IDE track)",
+    "links": {
+      "repository": "https://github.com/n-fdl/n-fdl"
+    }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false,
+    "zig": false
+  }
+}

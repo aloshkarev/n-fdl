@@ -1,0 +1,56 @@
+{
+  "name": "tree-sitter-adgl",
+  "version": "0.1.0",
+  "description": "ADGL grammar for tree-sitter (IDE track; not used by verify/runtime)",
+  "main": "bindings/node",
+  "types": "bindings/node",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "adgl"
+  ],
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "binding.gyp",
+    "prebuilds/**",
+    "bindings/**",
+    "queries/**",
+    "src/**",
+    "*.wasm"
+  ],
+  "scripts": {
+    "install": "node-gyp-build",
+    "prestart": "tree-sitter build --wasm",
+    "start": "tree-sitter playground",
+    "test": "tree-sitter test"
+  },
+  "dependencies": {
+    "node-gyp-build": "^4.8.4",
+    "tree-sitter-cli": "^0.25.0"
+  },
+  "peerDependencies": {
+    "tree-sitter": "^0.22.4"
+  },
+  "peerDependenciesMeta": {
+    "tree-sitter": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "tree-sitter": "^0.22.4"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.adgl",
+      "file-types": [
+        "adgl"
+      ],
+      "highlights": [
+        "queries/highlights.scm"
+      ],
+      "injection-regex": "^adgl$"
+    }
+  ]
+}
