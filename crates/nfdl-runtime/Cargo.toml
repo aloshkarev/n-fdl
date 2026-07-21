@@ -5,5 +5,6 @@ edition = "2024"
 
 [dependencies]
 nfdl-bytecode = { path = "../nfdl-bytecode" }
+nfdl-vm = { path = "../nfdl-vm" }
 nfdl-syntax = { path = "../nfdl-syntax" }
 bytes = "1"

@@ -26,4 +26,4 @@ pub use runner::{
     parse_and_run_with_data_and_limits,
 };
 pub use session::{FlowKey, SessionContext, SessionDb};
-pub use vm::VmState;
+pub use vm::{VmError, VmState};
