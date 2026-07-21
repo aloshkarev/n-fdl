@@ -5,5 +5,5 @@
 
 pub use nfdl_bytecode::{
     BytecodeBinOp, BytecodeError, BytecodeProgram, BytecodeUnaryOp, BytecodeVm, Instruction,
-    Limits,
+    Limits, StreamOutcome, VmContinuation,
 };

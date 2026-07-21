@@ -25,6 +25,49 @@ impl std::fmt::Display for BytecodeError {
 
 impl std::error::Error for BytecodeError {}
 
+/// Frozen VM state for stream-mode `NeedMoreBytes` resume (spec 06 §5).
+///
+/// Holds only owned scalars / buffers — no arena borrows — so the snapshot
+/// survives across segment boundaries.
+#[derive(Debug, Clone)]
+pub struct VmContinuation {
+    slots: Vec<u64>,
+    slot_touched: Vec<bool>,
+    input: Vec<u8>,
+    input_pos: usize,
+    bit_offset: u8,
+    /// Instruction pointer of the pending (not-yet-executed) read.
+    ip: usize,
+    instructions_executed: usize,
+    loop_iterations: usize,
+    emitted: Vec<(String, u64)>,
+    rest_starts: Vec<(String, usize)>,
+    limits: Limits,
+    /// Hint: additional bytes required by the suspended read.
+    pub bytes_needed: usize,
+}
+
+impl VmContinuation {
+    /// How many more input bytes the suspended read asked for.
+    pub fn bytes_needed(&self) -> usize {
+        self.bytes_needed
+    }
+
+    /// Absolute byte offset already consumed from the flow buffer.
+    pub fn consumed(&self) -> usize {
+        self.input_pos
+    }
+}
+
+/// Result of a stream-mode interpret step (spec 06 §5.3).
+#[derive(Debug)]
+pub enum StreamOutcome {
+    /// Program reached `Return` / end with enough bytes.
+    Complete,
+    /// Suspended: caller should append bytes and [`BytecodeVm::resume`].
+    NeedMoreBytes(VmContinuation),
+}
+
 #[derive(Debug, Clone)]
 pub struct Limits {
     pub max_instructions: usize,
@@ -198,6 +241,11 @@ impl BytecodeVm {
         self.bit_offset = 0;
     }
 
+    /// Append bytes to the input buffer (used by stream resume).
+    pub fn append_input(&mut self, more: &[u8]) {
+        self.input.extend_from_slice(more);
+    }
+
     pub fn get_slot(&self, slot: u16) -> u64 {
         self.slots.get(slot as usize).copied().unwrap_or(0)
     }
@@ -230,6 +278,11 @@ impl BytecodeVm {
         self.input_pos
     }
 
+    /// Total bytes currently buffered (including not-yet-consumed tail).
+    pub fn input_len(&self) -> usize {
+        self.input.len()
+    }
+
     /// Fields recorded by `EmitField` instructions, in emission order.
     pub fn emitted(&self) -> &[(String, u64)] {
         &self.emitted
@@ -259,7 +312,18 @@ impl BytecodeVm {
         }
     }
 
+    /// Bits still available from the current cursor to end of input.
+    fn bits_remaining(&self) -> usize {
+        if self.input_pos >= self.input.len() {
+            return 0;
+        }
+        let full_bytes = self.input.len() - self.input_pos - 1;
+        let in_current = 8usize.saturating_sub(self.bit_offset as usize);
+        in_current + full_bytes * 8
+    }
+
     /// Read `bits` bits from the bit stream at (input_pos, bit_offset).
+    /// Caller must ensure enough bits are available when `stream` is true.
     fn read_bits(&mut self, bits: u8) -> u64 {
         let mut value: u64 = 0;
         let mut remaining = bits as usize;
@@ -283,12 +347,86 @@ impl BytecodeVm {
         value
     }
 
+    fn snapshot(&self, ip: usize, bytes_needed: usize) -> VmContinuation {
+        VmContinuation {
+            slots: self.slots.clone(),
+            slot_touched: self.slot_touched.clone(),
+            input: self.input.clone(),
+            input_pos: self.input_pos,
+            bit_offset: self.bit_offset,
+            ip,
+            instructions_executed: self.instructions_executed,
+            loop_iterations: self.loop_iterations,
+            emitted: self.emitted.clone(),
+            rest_starts: self.rest_starts.clone(),
+            limits: self.limits.clone(),
+            bytes_needed,
+        }
+    }
+
+    fn restore(cont: VmContinuation) -> Self {
+        Self {
+            slots: cont.slots,
+            input: cont.input,
+            input_pos: cont.input_pos,
+            bit_offset: cont.bit_offset,
+            limits: cont.limits,
+            instructions_executed: cont.instructions_executed,
+            loop_iterations: cont.loop_iterations,
+            emitted: cont.emitted,
+            rest_starts: cont.rest_starts,
+            slot_touched: cont.slot_touched,
+        }
+    }
+
+    /// Datagram-mode run: short reads zero-fill (historical behaviour).
     pub fn run(&mut self, program: &BytecodeProgram) -> Result<(), BytecodeError> {
         self.instructions_executed = 0;
-        let mut ip: usize = 0;
+        self.loop_iterations = 0;
+        match self.interpret(program, 0, false)? {
+            StreamOutcome::Complete => Ok(()),
+            StreamOutcome::NeedMoreBytes(_) => {
+                // Datagram mode never yields; treat as internal invariant break.
+                Err(BytecodeError::Constraint(
+                    "internal: datagram run yielded NeedMoreBytes".into(),
+                ))
+            }
+        }
+    }
+
+    /// Stream-mode run: short reads yield [`StreamOutcome::NeedMoreBytes`].
+    pub fn run_stream(
+        &mut self,
+        program: &BytecodeProgram,
+    ) -> Result<StreamOutcome, BytecodeError> {
+        self.instructions_executed = 0;
+        self.loop_iterations = 0;
+        self.interpret(program, 0, true)
+    }
+
+    /// Resume after [`StreamOutcome::NeedMoreBytes`]: append `more` and continue
+    /// from the saved program counter (spec 06 §5.3 resume-equivalence).
+    pub fn resume(
+        cont: VmContinuation,
+        program: &BytecodeProgram,
+        more: &[u8],
+    ) -> Result<(Self, StreamOutcome), BytecodeError> {
+        let start_ip = cont.ip;
+        let mut vm = Self::restore(cont);
+        vm.append_input(more);
+        let outcome = vm.interpret(program, start_ip, true)?;
+        Ok((vm, outcome))
+    }
+
+    fn interpret(
+        &mut self,
+        program: &BytecodeProgram,
+        start_ip: usize,
+        stream: bool,
+    ) -> Result<StreamOutcome, BytecodeError> {
+        let mut ip = start_ip;
         let instrs = &program.instructions;
 
-        self.loop_iterations = 0;
         while ip < instrs.len() {
             if self.instructions_executed > self.limits.max_instructions {
                 return Err(BytecodeError::LimitExceeded(format!(
@@ -326,10 +464,13 @@ impl BytecodeVm {
                     if self.input_pos < self.input.len() {
                         self.write_slot(*slot, self.input[self.input_pos] as u64);
                         self.input_pos += 1;
+                        ip += 1;
+                    } else if stream {
+                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, 1)));
                     } else {
                         self.write_slot(*slot, 0);
+                        ip += 1;
                     }
-                    ip += 1;
                 }
                 Instruction::ReadU16 { slot, le } => {
                     self.align_to_byte();
@@ -341,10 +482,15 @@ impl BytecodeVm {
                         };
                         self.write_slot(*slot, val);
                         self.input_pos += 2;
+                        ip += 1;
+                    } else if stream {
+                        let have = self.input.len().saturating_sub(self.input_pos);
+                        let needed = 2usize.saturating_sub(have);
+                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed.max(1))));
                     } else {
                         self.write_slot(*slot, 0);
+                        ip += 1;
                     }
-                    ip += 1;
                 }
                 Instruction::ReadU24 { slot, le } => {
                     self.align_to_byte();
@@ -356,10 +502,15 @@ impl BytecodeVm {
                         };
                         self.write_slot(*slot, val);
                         self.input_pos += 3;
+                        ip += 1;
+                    } else if stream {
+                        let have = self.input.len().saturating_sub(self.input_pos);
+                        let needed = 3usize.saturating_sub(have);
+                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed.max(1))));
                     } else {
                         self.write_slot(*slot, 0);
+                        ip += 1;
                     }
-                    ip += 1;
                 }
                 Instruction::ReadU32 { slot, le } => {
                     self.align_to_byte();
@@ -371,10 +522,15 @@ impl BytecodeVm {
                         };
                         self.write_slot(*slot, val);
                         self.input_pos += 4;
+                        ip += 1;
+                    } else if stream {
+                        let have = self.input.len().saturating_sub(self.input_pos);
+                        let needed = 4usize.saturating_sub(have);
+                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed.max(1))));
                     } else {
                         self.write_slot(*slot, 0);
+                        ip += 1;
                     }
-                    ip += 1;
                 }
                 Instruction::ReadSlice { len_slot, dst_slot } => {
                     self.align_to_byte();
@@ -385,6 +541,12 @@ impl BytecodeVm {
                     } else {
                         0usize
                     };
+                    if stream && *len_slot != u16::MAX && self.input_pos + len > self.input.len()
+                    {
+                        let have = self.input.len().saturating_sub(self.input_pos);
+                        let needed = len.saturating_sub(have).max(1);
+                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed)));
+                    }
                     let mut val = 0u64;
                     for i in 0..len.min(8) {
                         if self.input_pos + i < self.input.len() {
@@ -396,11 +558,17 @@ impl BytecodeVm {
                     ip += 1;
                 }
                 Instruction::ReadBits { bits, slot } => {
+                    if stream && self.bits_remaining() < *bits as usize {
+                        let missing_bits = (*bits as usize).saturating_sub(self.bits_remaining());
+                        let needed = missing_bits.div_ceil(8).max(1);
+                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed)));
+                    }
                     let val = self.read_bits(*bits);
                     self.write_slot(*slot, val);
                     ip += 1;
                 }
                 Instruction::ReadRest { name, slot } => {
+                    // Pragmatic v1: consume available bytes (FIN wait is Task 26+).
                     self.align_to_byte();
                     let before = self.input_pos;
                     let remaining = self.input.len().saturating_sub(self.input_pos);
@@ -437,20 +605,8 @@ impl BytecodeVm {
                         BytecodeBinOp::Add => l + r,
                         BytecodeBinOp::Sub => l.saturating_sub(r),
                         BytecodeBinOp::Mul => l * r,
-                        BytecodeBinOp::Div => {
-                            if r != 0 {
-                                l / r
-                            } else {
-                                0
-                            }
-                        }
-                        BytecodeBinOp::Mod => {
-                            if r != 0 {
-                                l % r
-                            } else {
-                                0
-                            }
-                        }
+                        BytecodeBinOp::Div => l.checked_div(r).unwrap_or(0),
+                        BytecodeBinOp::Mod => l.checked_rem(r).unwrap_or(0),
                         BytecodeBinOp::Eq => {
                             if l == r {
                                 1
@@ -540,17 +696,30 @@ impl BytecodeVm {
                     }
                 }
                 Instruction::Return => {
-                    return Ok(());
+                    return Ok(StreamOutcome::Complete);
                 }
             }
         }
-        Ok(())
+        Ok(StreamOutcome::Complete)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hdr_program() -> BytecodeProgram {
+        // a:u8, b:u8, c:u16be
+        BytecodeProgram {
+            instructions: vec![
+                Instruction::ReadU8 { slot: 0 },
+                Instruction::ReadU8 { slot: 1 },
+                Instruction::ReadU16 { slot: 2, le: false },
+                Instruction::Return,
+            ],
+            slot_count: 4,
+        }
+    }
 
     #[test]
     fn simple_read_u16_and_return() {
@@ -588,5 +757,97 @@ mod tests {
         let err = vm.run(&program).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("limit exceeded"), "got: {msg}");
+    }
+
+    #[test]
+    fn stream_yields_need_more_bytes_with_continuation() {
+        let program = hdr_program();
+        let mut vm = BytecodeVm::new(4);
+        vm.load_input(&[0x11]); // only first u8
+        match vm.run_stream(&program).expect("run_stream") {
+            StreamOutcome::NeedMoreBytes(cont) => {
+                assert!(cont.bytes_needed() >= 1);
+                assert_eq!(cont.consumed(), 1);
+            }
+            StreamOutcome::Complete => panic!("expected NeedMoreBytes"),
+        }
+    }
+
+    #[test]
+    fn resume_equivalence_split_vs_whole() {
+        let program = hdr_program();
+        let whole = [0x11u8, 0x22, 0x33, 0x44];
+
+        let mut vm_all = BytecodeVm::new(4);
+        vm_all.load_input(&whole);
+        assert!(matches!(
+            vm_all.run_stream(&program).unwrap(),
+            StreamOutcome::Complete
+        ));
+        let all_slots = [
+            vm_all.get_slot(0),
+            vm_all.get_slot(1),
+            vm_all.get_slot(2),
+        ];
+
+        // Feed one byte, then the rest.
+        let mut vm = BytecodeVm::new(4);
+        vm.load_input(&whole[..1]);
+        let cont = match vm.run_stream(&program).unwrap() {
+            StreamOutcome::NeedMoreBytes(c) => c,
+            StreamOutcome::Complete => panic!("expected NeedMoreBytes after 1 byte"),
+        };
+        let (vm2, outcome) = BytecodeVm::resume(cont, &program, &whole[1..]).unwrap();
+        assert!(matches!(outcome, StreamOutcome::Complete));
+        let split_slots = [vm2.get_slot(0), vm2.get_slot(1), vm2.get_slot(2)];
+        assert_eq!(
+            split_slots, all_slots,
+            "split feed must equal whole-buffer parse"
+        );
+        assert_eq!(split_slots, [0x11, 0x22, 0x3344]);
+    }
+
+    #[test]
+    fn resume_equivalence_byte_at_a_time() {
+        let program = hdr_program();
+        let whole = [0xAAu8, 0xBB, 0xCC, 0xDD];
+
+        let mut baseline = BytecodeVm::new(4);
+        baseline.load_input(&whole);
+        baseline.run_stream(&program).unwrap();
+        let expect = [
+            baseline.get_slot(0),
+            baseline.get_slot(1),
+            baseline.get_slot(2),
+        ];
+
+        let mut vm = BytecodeVm::new(4);
+        vm.load_input(&whole[..1]);
+        let mut pending = match vm.run_stream(&program).unwrap() {
+            StreamOutcome::NeedMoreBytes(c) => Some(c),
+            StreamOutcome::Complete => None,
+        };
+        let mut final_vm = vm;
+        for i in 1..whole.len() {
+            let cont = pending.take().expect("should still need bytes");
+            let (v, outcome) = BytecodeVm::resume(cont, &program, &whole[i..i + 1]).unwrap();
+            final_vm = v;
+            match outcome {
+                StreamOutcome::NeedMoreBytes(c) => pending = Some(c),
+                StreamOutcome::Complete => {
+                    pending = None;
+                    break;
+                }
+            }
+        }
+        assert!(pending.is_none(), "should complete after last byte");
+        assert_eq!(
+            [
+                final_vm.get_slot(0),
+                final_vm.get_slot(1),
+                final_vm.get_slot(2)
+            ],
+            expect
+        );
     }
 }

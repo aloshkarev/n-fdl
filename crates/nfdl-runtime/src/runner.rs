@@ -11,7 +11,7 @@ use crate::session::FlowKey;
 use nfdl_syntax::ast::Expr;
 use nfdl_syntax::{Parser, Protocol};
 
-fn compute_flow_key(key_expr: &Option<Expr>, ctx: &HashMap<String, u64>) -> FlowKey {
+pub(crate) fn compute_flow_key(key_expr: &Option<Expr>, ctx: &HashMap<String, u64>) -> FlowKey {
     // Render an endpoint expression (Tuple or scalar) into a canonical byte string
     // by concatenating each element's big-endian value. Used so that sorting two
     // endpoints is independent of direction (C4/C10, ADR-002 C4).

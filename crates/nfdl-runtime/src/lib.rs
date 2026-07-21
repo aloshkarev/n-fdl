@@ -2,6 +2,7 @@
 
 pub mod bytecode;
 pub mod context;
+pub mod continuation;
 pub mod efsm;
 pub mod error;
 pub mod event_bus;
@@ -11,8 +12,12 @@ pub mod runner;
 pub mod session;
 pub mod vm;
 
-pub use bytecode::{BytecodeProgram, BytecodeVm, Instruction, Limits};
+pub use bytecode::{BytecodeProgram, BytecodeVm, Instruction, Limits, StreamOutcome, VmContinuation};
 pub use context::ParserContext;
+pub use continuation::{
+    parse_stream_start, parse_stream_start_with_limits, resume, CompleteParse, StreamContinuation,
+    StreamParseStep,
+};
 pub use efsm::FsmEngine;
 pub use error::RuntimeError;
 pub use event_bus::{Event, EventBus, EventSink, VecSink};
