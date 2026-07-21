@@ -6,6 +6,7 @@
 
 use crate::ast::*;
 use crate::lexer::{Lexer, Token};
+use ndsl_trivia::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
@@ -16,17 +17,40 @@ pub enum ParseError {
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     current: Token,
+    /// Span of [`Self::current`].
+    current_span: Span,
+    /// Span of the token immediately before [`Self::current`].
+    prev_span: Span,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
         let mut lexer = Lexer::new(input);
         let current = lexer.next_token();
-        Self { lexer, current }
+        let current_span = lexer.last_span();
+        Self {
+            lexer,
+            current,
+            current_span,
+            prev_span: Span::unknown(),
+        }
     }
 
     fn advance(&mut self) {
+        self.prev_span = self.current_span;
         self.current = self.lexer.next_token();
+        self.current_span = self.lexer.last_span();
+    }
+
+    /// Span from `start` through the field body, including a trailing semicolon
+    /// when present (without consuming it).
+    fn field_span(&self, start: usize) -> Span {
+        let end = if self.current == Token::Semicolon {
+            self.current_span.end
+        } else {
+            self.prev_span.end
+        };
+        Span::new(start, end)
     }
 
     fn contains_rem(&self, expr: &Expr) -> bool {
@@ -554,6 +578,7 @@ impl<'a> Parser<'a> {
             }
             if let Token::Ident(kw) = &self.current {
                 let kw = kw.clone();
+                let ident_start = self.current_span.start;
                 self.advance();
                 if kw == "match" {
                     let tag = self.parse_expr().unwrap_or(Expr::Int(0));
@@ -717,6 +742,7 @@ impl<'a> Parser<'a> {
                                 continue;
                             }
                             let fname = fname.clone();
+                            let field_start = self.current_span.start;
                             self.advance();
                             if self.current == Token::Colon {
                                 self.advance();
@@ -728,6 +754,7 @@ impl<'a> Parser<'a> {
                                 validate: None,
                                 conditional: None,
                                 order: 0,
+                                span: self.field_span(field_start),
                             });
                         } else {
                             self.advance();
@@ -797,6 +824,7 @@ impl<'a> Parser<'a> {
                     validate,
                     conditional,
                     order: o,
+                    span: self.field_span(ident_start),
                 });
             } else {
                 self.advance();
@@ -1274,6 +1302,7 @@ impl<'a> Parser<'a> {
                         }
                         if let Token::Ident(kw) = &self.current {
                             let kw = kw.clone();
+                            let ident_start = self.current_span.start;
                             self.advance();
 
                             if kw == "let" {
@@ -1399,6 +1428,7 @@ impl<'a> Parser<'a> {
                                         }
 
                                         let fname = fname.clone();
+                                        let field_start = self.current_span.start;
                                         self.advance();
                                         if self.current == Token::Colon {
                                             self.advance();
@@ -1412,6 +1442,7 @@ impl<'a> Parser<'a> {
                                             validate: None,
                                             conditional: None,
                                             order: 0,
+                                            span: self.field_span(field_start),
                                         });
                                     } else {
                                         self.advance();
@@ -1513,6 +1544,7 @@ impl<'a> Parser<'a> {
                                 validate,
                                 conditional,
                                 order: o,
+                                span: self.field_span(ident_start),
                             });
                         } else {
                             self.advance();

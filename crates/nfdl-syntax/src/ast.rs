@@ -2,6 +2,8 @@
 //! Focused on fields, types, simple expressions, validate for datagram protocols.
 //! Now includes full state_machine support with states, transitions, guards and actions.
 
+use ndsl_trivia::Span;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum NfdlType {
     U8,
@@ -95,6 +97,8 @@ pub struct Field {
     pub conditional: Option<Expr>, // if cond
     /// Source order within the enclosing body (for interleaved emission).
     pub order: u32,
+    /// Byte span covering the field production in the source text.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

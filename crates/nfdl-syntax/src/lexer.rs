@@ -62,6 +62,8 @@ pub struct Lexer<'a> {
     pos: usize,
     /// Trivia collected while skipping ahead to the most recent token.
     pending_trivia: Vec<Trivia>,
+    /// Byte span of the most recently returned token.
+    last_token_span: Span,
 }
 
 impl<'a> Lexer<'a> {
@@ -71,12 +73,18 @@ impl<'a> Lexer<'a> {
             chars: input.chars(),
             pos: 0,
             pending_trivia: Vec::new(),
+            last_token_span: Span::unknown(),
         }
     }
 
     /// Take trivia collected immediately before the most recent [`Self::next_token`].
     pub fn trivia_before_next_token(&mut self) -> Vec<Trivia> {
         std::mem::take(&mut self.pending_trivia)
+    }
+
+    /// Byte span of the token most recently produced by [`Self::next_token`].
+    pub fn last_span(&self) -> Span {
+        self.last_token_span
     }
 
     fn bump(&mut self) -> Option<char> {
@@ -137,7 +145,8 @@ impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Token {
         self.pending_trivia.clear();
         self.skip_whitespace_and_comments();
-        match self.bump() {
+        let start = self.pos;
+        let tok = match self.bump() {
             Some('{') => Token::LBrace,
             Some('}') => Token::RBrace,
             Some('[') => Token::LBracket,
@@ -297,7 +306,9 @@ impl<'a> Lexer<'a> {
 
             Some(c) => Token::Error(format!("unexpected {}", c)),
             None => Token::Eof,
-        }
+        };
+        self.last_token_span = Span::new(start, self.pos);
+        tok
     }
 }
 
@@ -310,6 +321,7 @@ mod tests {
     fn lex_basic() {
         let mut l = Lexer::new("protocol ARP { message X { a: u8; } }");
         assert!(matches!(l.next_token(), Token::Protocol));
+        assert_eq!(l.last_span(), Span::new(0, "protocol".len()));
     }
 
     #[test]
