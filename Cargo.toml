@@ -11,6 +11,7 @@ members = [
     "crates/ndsl-fmt",
     "crates/ndsl-trivia",
     "crates/ndsl-clippy",
+    "crates/ndsl-cli",
     "crates/nfdl-fuzz",
     "crates/nfdl-syntax",
     "crates/nfdl-types",
@@ -35,6 +36,7 @@ ndsl-diag = { path = "crates/ndsl-diag" }
 ndsl-fmt = { path = "crates/ndsl-fmt" }
 ndsl-trivia = { path = "crates/ndsl-trivia" }
 ndsl-clippy = { path = "crates/ndsl-clippy" }
+ndsl-cli = { path = "crates/ndsl-cli" }
 dashmap = "6"
 winnow = "0.7"
 insta = "1"

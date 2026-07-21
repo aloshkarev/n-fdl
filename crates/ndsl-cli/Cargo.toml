@@ -1,0 +1,18 @@
+[package]
+name = "ndsl-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Unified N-FDL + ADGL CLI (parse, fmt, lint, check, run)"
+
+[[bin]]
+name = "ndsl-cli"
+path = "src/main.rs"
+
+[dependencies]
+airpulse_dsl-syntax = { path = "../airpulse_dsl-syntax" }
+ndsl-clippy = { path = "../ndsl-clippy" }
+ndsl-fmt = { path = "../ndsl-fmt" }
+nfdl-runtime = { path = "../nfdl-runtime" }
+nfdl-syntax = { path = "../nfdl-syntax" }
