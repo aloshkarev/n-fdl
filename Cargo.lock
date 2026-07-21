@@ -264,6 +264,15 @@ name = "ndsl-diag"
 version = "0.1.0"
 
 [[package]]
+name = "ndsl-fmt"
+version = "0.1.0"
+dependencies = [
+ "airpulse_dsl-syntax",
+ "ndsl-diag",
+ "nfdl-syntax",
+]
+
+[[package]]
 name = "ndsl-trivia"
 version = "0.1.0"
 dependencies = [
