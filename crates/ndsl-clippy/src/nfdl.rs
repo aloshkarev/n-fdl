@@ -5,8 +5,8 @@
 use crate::{LintCheck, LintContext, LintDef, LintDiagnostic, LintId, LintLevel, LintStore};
 use ndsl_diag::Span;
 use nfdl_syntax::ast::{
-    Action, BinOp, Expr, Field, Loop, Match, MatchArm, Message, NfdlType, Protocol, StateMachine,
-    Validate,
+    Action, BinOp, Expr, Field, Let, Loop, Match, MatchArm, Message, NfdlType, Protocol,
+    StateMachine, Validate,
 };
 use std::collections::HashSet;
 
@@ -16,8 +16,9 @@ pub const NFDL_NAMING_TYPE: LintId = LintId::new("NFDL0001");
 pub const NFDL_NAMING_FIELD: LintId = LintId::new("NFDL0002");
 /// Message declared but never referenced by bind / MessageRef / transition.
 pub const NFDL_UNUSED_MESSAGE: LintId = LintId::new("NFDL0100");
-/// Field declared but never referenced in any expression.
-pub const NFDL_UNUSED_FIELD: LintId = LintId::new("NFDL0101");
+/// `let` binding declared but never referenced in any expression.
+/// Wire-layout message fields are never flagged — declaration is their use.
+pub const NFDL_UNUSED_LET: LintId = LintId::new("NFDL0101");
 /// Validate expression is a constant / tautology stub.
 pub const NFDL_REDUNDANT_VALIDATE: LintId = LintId::new("NFDL0200");
 
@@ -48,11 +49,11 @@ pub fn register_nfdl_pack(store: &mut LintStore) {
     );
     store.register(
         LintDef {
-            id: NFDL_UNUSED_FIELD,
+            id: NFDL_UNUSED_LET,
             default_level: LintLevel::Warn,
-            description: "field is never referenced in an expression",
+            description: "let binding is never referenced in an expression",
         },
-        check_unused_fields as LintCheck,
+        check_unused_lets as LintCheck,
     );
     store.register(
         LintDef {
@@ -154,26 +155,22 @@ fn check_unused_messages(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
     out
 }
 
-fn check_unused_fields(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
+fn check_unused_lets(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
     let Some(proto) = protocol(ctx) else {
         return Vec::new();
     };
     let used = referenced_idents(proto);
-    if used.is_empty() {
-        // Pure wire layouts with no expression context: skip to avoid noise.
-        return Vec::new();
-    }
     let mut out = Vec::new();
-    for_each_field(proto, &mut |field| {
-        if !used.contains(field.name.as_str()) {
+    for_each_let(proto, &mut |lt| {
+        if !used.contains(lt.name.as_str()) {
             out.push(LintDiagnostic::new(
-                NFDL_UNUSED_FIELD,
+                NFDL_UNUSED_LET,
                 LintLevel::Warn,
                 format!(
-                    "field `{}` is never referenced in an expression",
-                    field.name
+                    "let binding `{}` is never referenced in an expression",
+                    lt.name
                 ),
-                field.span,
+                find_ident_span(ctx.source, &lt.name),
             ));
         }
     });
@@ -332,7 +329,8 @@ fn referenced_idents(proto: &Protocol) -> HashSet<&str> {
                 }
                 for action in &tr.actions {
                     match action {
-                        Action::Set { value, .. } => {
+                        Action::Set { var, value } => {
+                            set.insert(var.as_str());
                             collect_idents_in_expr(value, &mut set);
                         }
                         Action::Emit { .. } => {}
@@ -457,6 +455,32 @@ fn collect_idents_in_expr<'a>(expr: &'a Expr, set: &mut HashSet<&'a str>) {
         Expr::Field(base, name) => {
             collect_idents_in_expr(base, set);
             set.insert(name.as_str());
+        }
+    }
+}
+
+fn for_each_let(proto: &Protocol, f: &mut dyn FnMut(&Let)) {
+    for msg in &proto.messages {
+        for_each_let_in_message(msg, f);
+    }
+}
+
+fn for_each_let_in_message(msg: &Message, f: &mut dyn FnMut(&Let)) {
+    for lt in &msg.lets {
+        f(lt);
+    }
+    for m in &msg.matches {
+        for_each_let_in_match(m, f);
+    }
+}
+
+fn for_each_let_in_match(m: &Match, f: &mut dyn FnMut(&Let)) {
+    for arm in &m.arms {
+        for lt in &arm.lets {
+            f(lt);
+        }
+        for nested in &arm.matches {
+            for_each_let_in_match(nested, f);
         }
     }
 }
@@ -667,29 +691,71 @@ protocol Good {
     }
 
     #[test]
-    fn unused_field_when_never_referenced() {
+    fn unused_let_when_never_referenced() {
         let src = r#"
 protocol Good {
     meta { endian = big; mode = datagram; }
     message Pkt {
         used: u8;
-        dead: u8;
-        validate used == 1 -> "ok";
+        let alive = used + 1;
+        let dead = used + 2;
+        validate alive == 1 -> "ok";
     }
 }
 "#;
         let diags = lint(src);
         assert!(
-            diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_FIELD
+            diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET
                 && d.diagnostic.message.contains("dead")),
-            "expected unused field lint, got: {:?}",
+            "expected unused let lint, got: {:?}",
             diags
         );
         assert!(
-            !diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_FIELD
-                && d.diagnostic.message.contains("`used`")),
-            "used field should not warn: {:?}",
+            !diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET
+                && d.diagnostic.message.contains("`alive`")),
+            "alive let should not warn: {:?}",
             diags
+        );
+        assert!(
+            !diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET
+                && d.diagnostic.message.contains("`used`")),
+            "wire field must not be flagged as unused let: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn wire_layout_fields_never_trigger_nfdl0101() {
+        // ARP-like mixed validates + pure payload fields (regression for false positives).
+        let src = r#"
+protocol Arp {
+    meta { endian = big; mode = datagram; }
+    message ArpPacket {
+        hw_type: u16;
+        proto_type: u16;
+        validate proto_type == 0x0800 -> "Only IPv4";
+        hw_len: u8;
+        validate hw_len > 0 -> "hw";
+        proto_len: u8;
+        validate proto_len > 0 -> "proto";
+        opcode: u16;
+        sender_mac: bytes[hw_len];
+        sender_ip: bytes[proto_len];
+        target_mac: bytes[hw_len];
+        target_ip: bytes[proto_len];
+    }
+    bind Ethernet payload to ArpPacket when ethertype == 0x0806;
+}
+"#;
+        let diags = lint(src);
+        assert!(
+            !diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET),
+            "wire layout fields must not emit NFDL0101, got: {:?}",
+            diags
+                .iter()
+                .filter(|d| d.diagnostic.id == NFDL_UNUSED_LET)
+                .map(|d| &d.diagnostic.message)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -746,13 +812,8 @@ protocol Arp {
                 )
             })
             .collect();
-        // sender_mac / sender_ip / hw_type are unused-field candidates; hw_len/proto_len/proto_type used.
-        // Naming and unused-message / redundant should be clean.
         assert!(
-            !pack.iter().any(|d| d.diagnostic.id == NFDL_NAMING_TYPE
-                || d.diagnostic.id == NFDL_NAMING_FIELD
-                || d.diagnostic.id == NFDL_UNUSED_MESSAGE
-                || d.diagnostic.id == NFDL_REDUNDANT_VALIDATE),
+            pack.is_empty(),
             "unexpected pack lints: {:?}",
             pack.iter()
                 .map(|d| (&d.diagnostic.id, &d.diagnostic.message))

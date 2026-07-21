@@ -19,7 +19,7 @@ use std::str::FromStr;
 pub use builtin::NFDL_EMPTY_FILE;
 pub use ndsl_diag::Span;
 pub use nfdl::{
-    NFDL_NAMING_FIELD, NFDL_NAMING_TYPE, NFDL_REDUNDANT_VALIDATE, NFDL_UNUSED_FIELD,
+    NFDL_NAMING_FIELD, NFDL_NAMING_TYPE, NFDL_REDUNDANT_VALIDATE, NFDL_UNUSED_LET,
     NFDL_UNUSED_MESSAGE,
 };
 pub use render::{render, RenderFormat};

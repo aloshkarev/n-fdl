@@ -38,7 +38,7 @@ Parsing accepts case-insensitive `allow`, `warn`/`warning`, and `deny`/`forbid`.
 | Block | Reserved for |
 |-------|----------------|
 | `NFDL0001`–`NFDL0099` | Naming conventions (CamelCase, snake_case) |
-| `NFDL0100`–`NFDL0199` | Unused declarations (messages, fields) |
+| `NFDL0100`–`NFDL0199` | Unused declarations (messages, `let` bindings) |
 | `NFDL0200`–`NFDL0299` | Redundant or stub `validate` blocks |
 | `NFDL0900`–`NFDL0909` | Engine-smoke / driver demos (e.g. `NFDL0900` empty file) |
 | `ADGLS0001`–`ADGLS0099` | Unused `correlate` / graph bindings |
@@ -56,7 +56,7 @@ canonical Rust parser (`nfdl-syntax`) succeeds; tree-sitter is not used.
 | `NFDL0001` | warn | Protocol and message names should be CamelCase (PascalCase: leading uppercase ASCII letter, alphanumeric only) |
 | `NFDL0002` | warn | Field names should be snake_case (leading lowercase, `[a-z0-9_]+`, no `__` / trailing `_`) |
 | `NFDL0100` | warn | Message is never referenced by `bind` layer/source, `MessageRef` types, or state-machine transitions (single entry-point messages without a dispatch graph are exempt) |
-| `NFDL0101` | warn | Field is never referenced in any expression (skipped when the protocol has no expression idents at all, to avoid pure wire-layout noise) |
+| `NFDL0101` | warn | `let` binding is never referenced in any expression. **Wire-layout message fields are not linted** — declaration is their use; payload fields that appear only on the wire are intentional |
 | `NFDL0200` | warn | Validate is a constant (`true`/`false`/int), structural tautology (`x == x`), or has an empty message string |
 | `NFDL0900` | warn | Source file is empty or whitespace-only (engine-smoke; kept for driver demos) |
 
