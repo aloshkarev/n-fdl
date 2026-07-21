@@ -8,6 +8,7 @@ members = [
     "crates/airpulse_dsl-syntax",
     "crates/airpulse_dsl-types",
     "crates/ndsl-diag",
+    "crates/ndsl-trivia",
     "crates/nfdl-fuzz",
     "crates/nfdl-syntax",
     "crates/nfdl-types",
@@ -28,6 +29,8 @@ license = "MIT"
 authors = ["Aleksandr Loshkarev <mailbox@aloshkarev.com>"]
 
 [workspace.dependencies]
+ndsl-diag = { path = "crates/ndsl-diag" }
+ndsl-trivia = { path = "crates/ndsl-trivia" }
 dashmap = "6"
 winnow = "0.7"
 insta = "1"

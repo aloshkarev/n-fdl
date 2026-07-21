@@ -257,6 +257,13 @@ name = "ndsl-diag"
 version = "0.1.0"
 
 [[package]]
+name = "ndsl-trivia"
+version = "0.1.0"
+dependencies = [
+ "ndsl-diag",
+]
+
+[[package]]
 name = "nfdl-bytecode"
 version = "0.1.0"
 
