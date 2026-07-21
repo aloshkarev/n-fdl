@@ -740,6 +740,34 @@ mod tests {
     }
 
     #[test]
+    fn format_adgl_keeps_parens_for_unary_over_mul() {
+        // Unary and Mul share prec 12; without raising unary-child parent prec,
+        // `!(a.x * a.y)` prints as `!a.x * a.y` and re-parses as `(!a.x) * a.y`.
+        let src = r#"
+ruleset "x" {
+    version = "1.0"
+    evidence r {
+        scope: Session
+        anchor a: event(tcp.retransmission_burst) {
+            !(a.x * a.y)
+        }
+    }
+}
+"#;
+        let out = format_adgl_source(src).expect("valid ADGL must parse");
+        assert!(
+            out.contains("!(a.x * a.y)"),
+            "unary-over-mul must keep parens; got:\n{out}"
+        );
+        assert!(
+            !out.contains("!a.x * a.y"),
+            "must not drop parens into `!a.x * a.y`; got:\n{out}"
+        );
+        let twice = format_adgl_source(&out).expect("re-format");
+        assert_eq!(out, twice);
+    }
+
+    #[test]
     fn format_nfdl_examples_are_idempotent() {
         let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
         let mut saw = 0usize;

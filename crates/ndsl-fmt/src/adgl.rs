@@ -604,7 +604,9 @@ fn emit_expr(out: &mut String, expr: &Expr<'_>, parent_prec: u8) {
         }
         ExprKind::Unary { op, expr } => {
             out.push_str(unary_str(op));
-            emit_expr(out, expr, 12);
+            // Unary and Mul/Div/Rem share prec 12; demand >12 so `!(a*b)` keeps parens
+            // (otherwise `!a * b` re-parses as `(!a) * b`).
+            emit_expr(out, expr, 13);
         }
         ExprKind::Binary { op, left, right } => {
             let p = binop_prec(op);
