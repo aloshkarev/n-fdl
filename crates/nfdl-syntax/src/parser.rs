@@ -662,11 +662,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a `match`-arm or message body block (the `{ ... }` contents, with
+    /// Parse a message or `match`-arm body block (the `{ ... }` contents, with
     /// `{` already consumed) up to and including the closing `}`. Handles
     /// `let`, `loop` (with optional `carry`/`while`/`next`), standalone
-    /// `validate`, nested `match`, and plain `field: type [if cond];`.
-    fn parse_arm_body(
+    /// `validate`, nested `match`, and plain `field: type [validate] [if cond];`.
+    /// Shared so statement-level recovery hooks live in one place.
+    fn parse_body(
         &mut self,
     ) -> Result<(Vec<Field>, Vec<Let>, Vec<Loop>, Vec<Validate>, Vec<Match>), ParseError> {
         let mut fields = vec![];
@@ -748,7 +749,7 @@ impl<'a> Parser<'a> {
                         if self.current == Token::LBrace {
                             self.advance();
                         }
-                        let arm = self.parse_arm_body();
+                        let arm = self.parse_body();
                         let Some((af, al, alp, av, am)) = self.recover_stmt(arm)? else {
                             continue;
                         };
@@ -927,6 +928,13 @@ impl<'a> Parser<'a> {
                     if self.current == Token::RBrace {
                         self.advance();
                     }
+                    if self.contains_rem(&condition) {
+                        if self.recover_reject(ParseError::Syntax(
+                            "StreamRemControlFlow: __rem forbidden in loop while condition (see spec 05-verification)".into(),
+                        ))? {
+                            continue;
+                        }
+                    }
                     let o = body_seq;
                     body_seq += 1;
                     loops.push(Loop {
@@ -952,10 +960,26 @@ impl<'a> Parser<'a> {
                     if v == "validate" {
                         self.advance();
                         let vexpr = self.parse_expr().unwrap_or(Expr::Int(1));
+                        // Per-field `validate expr -> "msg"` (C5): capture
+                        // the user message instead of dropping it.
+                        let message = if self.current == Token::Arrow {
+                            self.advance();
+                            if let Token::String(s) = &self.current {
+                                let m = s.clone();
+                                self.advance();
+                                m
+                            } else {
+                                "constraint".into()
+                            }
+                        } else {
+                            "constraint".into()
+                        };
+                        let o = body_seq;
+                        body_seq += 1;
                         validate = Some(Validate {
                             expr: vexpr,
-                            message: "constraint".into(),
-                            order: 0,
+                            message,
+                            order: o,
                         });
                         while self.current != Token::Semicolon
                             && self.current != Token::RBrace
@@ -1367,410 +1391,12 @@ impl<'a> Parser<'a> {
                         self.advance();
                     }
 
-                    let mut fields = vec![];
-                    let mut lets = vec![];
-                    let mut loops = vec![];
-                    let mut validates = vec![];
-                    let mut matches = vec![];
-                    // Monotonic source-order counter so the emitter can interleave
-                    // fields/lets/loops/validates/matches in the order they were written
-                    // (a field may reference a preceding `let`, and a `let` may reference
-                    // preceding fields).
-                    let mut body_seq: u32 = 0;
-
-                    while self.current != Token::RBrace && self.current != Token::Eof {
-                        // Standalone `validate expr -> "msg";` (refinement on prior fields/lets)
-                        if self.current == Token::Validate {
-                            self.advance();
-                            let vexpr = match self.parse_expr() {
-                                Ok(e) => e,
-                                Err(_) => Expr::Int(1),
-                            };
-                            let message = if self.current == Token::Arrow {
-                                self.advance();
-                                if let Token::String(s) = &self.current {
-                                    let m = s.clone();
-                                    self.advance();
-                                    m
-                                } else {
-                                    "constraint".into()
-                                }
-                            } else {
-                                "constraint".into()
-                            };
-                            let o = body_seq;
-                            body_seq += 1;
-                            validates.push(Validate {
-                                expr: vexpr,
-                                message,
-                                order: o,
-                            });
-                            while self.current != Token::Semicolon
-                                && self.current != Token::RBrace
-                                && self.current != Token::Eof
-                            {
-                                self.advance();
-                            }
-                            if self.current == Token::Semicolon {
-                                self.advance();
-                            }
-                            continue;
-                        }
-                        // `match <tag> { case N => { ... } default => { ... } }` tagged union (C6)
-                        if let Token::Ident(kw) = &self.current {
-                            if kw == "match" {
-                                self.advance();
-                                let tag = self.parse_expr().unwrap_or(Expr::Int(0));
-                                if self.current == Token::LBrace {
-                                    self.advance();
-                                }
-                                let mut arms = vec![];
-                                while self.current != Token::RBrace && self.current != Token::Eof {
-                                    let case_val = match &self.current {
-                                        Token::Ident(d) if d == "default" => {
-                                            self.advance();
-                                            None
-                                        }
-                                        Token::Ident(c) if c == "case" => {
-                                            self.advance();
-                                            if let Token::Int(v) = &self.current {
-                                                let v = *v;
-                                                self.advance();
-                                                Some(v)
-                                            } else {
-                                                self.advance();
-                                                Some(0)
-                                            }
-                                        }
-                                        _ => {
-                                            self.advance();
-                                            None
-                                        }
-                                    };
-                                    if self.current == Token::Arrow {
-                                        self.advance();
-                                    }
-                                    if self.current == Token::LBrace {
-                                        self.advance();
-                                    }
-                                    let arm = self.parse_arm_body();
-                                    let Some((af, al, alp, av, am)) = self.recover_stmt(arm)? else {
-                                        continue;
-                                    };
-                                    arms.push(MatchArm {
-                                        case: case_val,
-                                        fields: af,
-                                        lets: al,
-                                        loops: alp,
-                                        validates: av,
-                                        matches: am,
-                                    });
-                                    if self.current == Token::Comma {
-                                        self.advance();
-                                    }
-                                }
-                                if self.current == Token::RBrace {
-                                    self.advance();
-                                }
-                                let o = body_seq;
-                                body_seq += 1;
-                                matches.push(Match {
-                                    tag,
-                                    arms,
-                                    order: o,
-                                });
-                                continue;
-                            }
-                        }
-                        if let Token::Ident(kw) = &self.current {
-                            let kw = kw.clone();
-                            let ident_start = self.current_span.start;
-                            self.advance();
-
-                            if kw == "let" {
-                                if let Token::Ident(let_name) = &self.current {
-                                    let lname = let_name.clone();
-                                    self.advance();
-                                    if self.current == Token::Eq {
-                                        self.advance();
-                                    }
-                                    if let Ok(val) = self.parse_expr() {
-                                        let o = body_seq;
-                                        body_seq += 1;
-                                        lets.push(Let {
-                                            name: lname,
-                                            value: val,
-                                            order: o,
-                                        });
-                                    }
-                                    if self.current == Token::Semicolon {
-                                        self.advance();
-                                    }
-                                    continue;
-                                }
-                            }
-
-                            if kw == "loop" {
-                                let loop_name = if let Token::Ident(n) = &self.current {
-                                    let nn = n.clone();
-                                    self.advance();
-                                    nn
-                                } else {
-                                    "loop".to_string()
-                                };
-
-                                let mut carries = vec![];
-                                // parse optional carry decls: carry name : type = init_expr
-                                while let Token::Ident(kw2) = &self.current {
-                                    if kw2 == "carry" {
-                                        self.advance();
-                                        let cname = if let Token::Ident(n) = &self.current {
-                                            let nn = n.clone();
-                                            self.advance();
-                                            nn
-                                        } else {
-                                            "".to_string()
-                                        };
-                                        if self.current == Token::Colon {
-                                            self.advance();
-                                        }
-                                        let cty_r = self.parse_type();
-                                        let Some(cty) = self.recover_stmt(cty_r)? else {
-                                            continue;
-                                        };
-                                        if self.current == Token::Eq {
-                                            self.advance();
-                                        }
-                                        let init = if let Ok(e) = self.parse_expr() {
-                                            e
-                                        } else {
-                                            Expr::Int(0)
-                                        };
-                                        if self.current == Token::Semicolon {
-                                            self.advance();
-                                        }
-                                        carries.push(Carry {
-                                            name: cname,
-                                            ty: cty,
-                                            init,
-                                        });
-                                        continue;
-                                    } else {
-                                        break;
-                                    }
-                                }
-
-                                // while expr   (parens optional per gtpu.nfdl)
-                                if let Token::Ident(w) = &self.current {
-                                    if w == "while" {
-                                        self.advance();
-                                    }
-                                }
-
-                                let mut condition = Expr::Int(1);
-                                // parse expr even without parens; stop at { or ;
-                                if self.current != Token::LBrace && self.current != Token::Semicolon
-                                {
-                                    if let Ok(e) = self.parse_expr() {
-                                        condition = e;
-                                    }
-                                }
-
-                                let mut loop_body = vec![];
-                                let mut nexts = vec![];
-                                if self.current == Token::LBrace {
-                                    self.advance();
-                                }
-
-                                while self.current != Token::RBrace && self.current != Token::Eof {
-                                    if let Token::Ident(fname) = &self.current {
-                                        // handle next stmt inside loop body
-                                        if fname == "next" {
-                                            self.advance();
-                                            let nname = if let Token::Ident(n) = &self.current {
-                                                let nn = n.clone();
-                                                self.advance();
-                                                nn
-                                            } else {
-                                                "".to_string()
-                                            };
-                                            if self.current == Token::Eq {
-                                                self.advance();
-                                            }
-                                            let nval = if let Ok(e) = self.parse_expr() {
-                                                e
-                                            } else {
-                                                Expr::Int(0)
-                                            };
-                                            if self.current == Token::Semicolon {
-                                                self.advance();
-                                            }
-                                            nexts.push(NextStmt {
-                                                name: nname,
-                                                value: nval,
-                                            });
-                                            continue;
-                                        }
-
-                                        let fname = fname.clone();
-                                        let field_start = self.current_span.start;
-                                        self.advance();
-                                        if self.current == Token::Colon {
-                                            self.advance();
-                                        }
-
-                                        let ty_r = self.parse_type();
-                                        let Some(ty) = self.recover_stmt(ty_r)? else {
-                                            continue;
-                                        };
-                                        let mut conditional = None;
-                                        if let Token::Ident(v) = &self.current {
-                                            if v == "if" {
-                                                self.advance();
-                                                let e_r = self.parse_expr();
-                                                let Some(e) = self.recover_stmt(e_r)? else {
-                                                    continue;
-                                                };
-                                                if self.contains_rem(&e) {
-                                                    if self.recover_reject(ParseError::Syntax(
-                                                        "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                                                    ))? {
-                                                        continue;
-                                                    }
-                                                }
-                                                conditional = Some(e);
-                                            }
-                                        }
-
-                                        loop_body.push(Field {
-                                            name: fname,
-                                            ty,
-                                            validate: None,
-                                            conditional,
-                                            order: 0,
-                                            span: self.field_span(field_start),
-                                        });
-                                    } else {
-                                        self.advance();
-                                    }
-                                    if self.current == Token::Semicolon {
-                                        self.advance();
-                                    }
-                                }
-                                if self.current == Token::RBrace {
-                                    self.advance();
-                                }
-
-                                if self.contains_rem(&condition) {
-                                    if self.recover_reject(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in loop while condition (see spec 05-verification)".into()))? {
-                                        continue;
-                                    }
-                                }
-                                let o = body_seq;
-                                body_seq += 1;
-                                loops.push(Loop {
-                                    name: loop_name,
-                                    carries,
-                                    condition,
-                                    body: loop_body,
-                                    nexts,
-                                    order: o,
-                                });
-                                continue;
-                            }
-
-                            // normal field
-                            if self.current == Token::Colon {
-                                self.advance();
-                            }
-
-                            let ty_r = self.parse_type();
-                            let Some(ty) = self.recover_stmt(ty_r)? else {
-                                continue;
-                            };
-
-                            let mut validate = None;
-                            if let Token::Ident(v) = &self.current {
-                                if v == "validate" {
-                                    self.advance();
-                                    let vexpr = if let Ok(e) = self.parse_expr() {
-                                        e
-                                    } else {
-                                        Expr::Int(1)
-                                    };
-                                    // Per-field `validate expr -> "msg"` (C5): capture
-                                    // the user message instead of dropping it.
-                                    let message = if self.current == Token::Arrow {
-                                        self.advance();
-                                        if let Token::String(s) = &self.current {
-                                            let m = s.clone();
-                                            self.advance();
-                                            m
-                                        } else {
-                                            "constraint".into()
-                                        }
-                                    } else {
-                                        "constraint".into()
-                                    };
-                                    let o = body_seq;
-                                    body_seq += 1;
-                                    validate = Some(Validate {
-                                        expr: vexpr,
-                                        message,
-                                        order: o,
-                                    });
-                                    while self.current != Token::Semicolon
-                                        && self.current != Token::RBrace
-                                        && self.current != Token::Eof
-                                    {
-                                        self.advance();
-                                    }
-                                }
-                            }
-
-                            let mut conditional = None;
-                            if let Token::Ident(v) = &self.current {
-                                if v == "if" {
-                                    self.advance();
-                                    let e_r = self.parse_expr();
-                                    let Some(e) = self.recover_stmt(e_r)? else {
-                                        continue;
-                                    };
-                                    if self.contains_rem(&e) {
-                                        if self.recover_reject(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into()))? {
-                                            continue;
-                                        }
-                                    }
-                                    conditional = Some(e);
-                                    while self.current != Token::Semicolon
-                                        && self.current != Token::RBrace
-                                        && self.current != Token::Eof
-                                    {
-                                        self.advance();
-                                    }
-                                }
-                            }
-
-                            let o = body_seq;
-                            body_seq += 1;
-                            fields.push(Field {
-                                name: kw,
-                                ty,
-                                validate,
-                                conditional,
-                                order: o,
-                                span: self.field_span(ident_start),
-                            });
-                        } else {
-                            self.advance();
-                        }
-                        if self.current == Token::Semicolon {
-                            self.advance();
-                        }
-                    }
-                    if self.current == Token::RBrace {
-                        self.advance();
-                    }
+                    let body = self.parse_body();
+                    let Some((fields, lets, loops, validates, matches)) =
+                        self.recover_stmt(body)?
+                    else {
+                        continue;
+                    };
 
                     proto.messages.push(Message {
                         name,
