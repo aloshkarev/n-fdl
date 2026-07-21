@@ -1,0 +1,13 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+expression: loop_body_field_view(src)
+---
+[
+    (
+        "opt",
+        U16,
+        Some(
+            "Binary { op: Gt, left: Ident(\"flags\"), right: Int(0) }",
+        ),
+    ),
+]

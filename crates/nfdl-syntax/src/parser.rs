@@ -774,14 +774,13 @@ impl<'a> Parser<'a> {
                             if let Token::Ident(v) = &self.current {
                                 if v == "if" {
                                     self.advance();
-                                    if let Ok(e) = self.parse_expr() {
-                                        if self.contains_rem(&e) {
-                                            return Err(ParseError::Syntax(
-                                                "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                                            ));
-                                        }
-                                        conditional = Some(e);
+                                    let e = self.parse_expr()?;
+                                    if self.contains_rem(&e) {
+                                        return Err(ParseError::Syntax(
+                                            "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
+                                        ));
                                     }
+                                    conditional = Some(e);
                                 }
                             }
                             loop_body.push(Field {
@@ -841,14 +840,13 @@ impl<'a> Parser<'a> {
                 if let Token::Ident(v) = &self.current {
                     if v == "if" {
                         self.advance();
-                        if let Ok(e) = self.parse_expr() {
-                            if self.contains_rem(&e) {
-                                return Err(ParseError::Syntax(
-                                    "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                                ));
-                            }
-                            conditional = Some(e);
+                        let e = self.parse_expr()?;
+                        if self.contains_rem(&e) {
+                            return Err(ParseError::Syntax(
+                                "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
+                            ));
                         }
+                        conditional = Some(e);
                         while self.current != Token::Semicolon
                             && self.current != Token::RBrace
                             && self.current != Token::Eof
@@ -1486,14 +1484,13 @@ impl<'a> Parser<'a> {
                                         if let Token::Ident(v) = &self.current {
                                             if v == "if" {
                                                 self.advance();
-                                                if let Ok(e) = self.parse_expr() {
-                                                    if self.contains_rem(&e) {
-                                                        return Err(ParseError::Syntax(
-                                                            "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
-                                                        ));
-                                                    }
-                                                    conditional = Some(e);
+                                                let e = self.parse_expr()?;
+                                                if self.contains_rem(&e) {
+                                                    return Err(ParseError::Syntax(
+                                                        "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into(),
+                                                    ));
                                                 }
+                                                conditional = Some(e);
                                             }
                                         }
 
@@ -1582,12 +1579,11 @@ impl<'a> Parser<'a> {
                             if let Token::Ident(v) = &self.current {
                                 if v == "if" {
                                     self.advance();
-                                    if let Ok(e) = self.parse_expr() {
-                                        if self.contains_rem(&e) {
-                                            return Err(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into()));
-                                        }
-                                        conditional = Some(e);
+                                    let e = self.parse_expr()?;
+                                    if self.contains_rem(&e) {
+                                        return Err(ParseError::Syntax("StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)".into()));
                                     }
+                                    conditional = Some(e);
                                     while self.current != Token::Semicolon
                                         && self.current != Token::RBrace
                                         && self.current != Token::Eof
