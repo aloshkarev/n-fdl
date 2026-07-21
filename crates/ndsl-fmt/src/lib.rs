@@ -1,11 +1,11 @@
 //! Opinionated formatter for N-FDL and ADGL.
 //!
-//! N-FDL: AST pretty-printer (Wave 2 / Task 13). ADGL remains an identity stub
-//! until Task 14.
+//! Both tracks are AST pretty-printers (N-FDL: Task 13; ADGL: Task 14).
 
 #![forbid(unsafe_code)]
 
-use airpulse_dsl_syntax::parse_ruleset;
+mod adgl;
+
 use ndsl_diag::DiagBuffer;
 use ndsl_trivia::TriviaKind;
 use nfdl_syntax::ast::{
@@ -13,6 +13,8 @@ use nfdl_syntax::ast::{
     Protocol, State, StateMachine, Transition, UnaryOp, Validate,
 };
 use nfdl_syntax::{Lexer, ParseError, Parser, Token};
+
+pub use adgl::{format_adgl_source, format_adgl_source_with};
 
 /// Formatter configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,12 +92,6 @@ pub fn format_nfdl_source_with(src: &str, opts: &FormatOptions) -> Result<String
         out.push('\n');
     }
     Ok(out)
-}
-
-/// Parse ADGL source; on success return `src` unchanged (identity stub).
-pub fn format_adgl_source(src: &str) -> Result<String, FormatError> {
-    parse_ruleset(src).map_err(FormatError::Adgl)?;
-    Ok(src.to_owned())
 }
 
 fn collect_comments(src: &str) -> Vec<String> {
@@ -671,11 +667,12 @@ mod tests {
 "#;
 
     const MINIMAL_ADGL: &str = r#"ruleset "x" {
-  version = "1.0"
-  evidence r {
-    scope: Session
-    anchor a: event(tcp.retransmission_burst)
-  }
+    version = "1.0"
+
+    evidence r {
+        scope: Session
+        anchor a: event(tcp.retransmission_burst)
+    }
 }
 "#;
 
@@ -715,7 +712,14 @@ mod tests {
     }
 
     #[test]
-    fn format_adgl_source_valid_is_identity() {
+    fn format_adgl_source_pretty_prints_minimal() {
+        let messy = r#"ruleset "x"{version="1.0"evidence r{scope:Session anchor a:event(tcp.retransmission_burst)}}"#;
+        let out = format_adgl_source(messy).expect("valid ADGL must parse");
+        assert_eq!(out, MINIMAL_ADGL);
+    }
+
+    #[test]
+    fn format_adgl_source_already_canonical_is_stable() {
         let out = format_adgl_source(MINIMAL_ADGL).expect("valid ADGL must parse");
         assert_eq!(out, MINIMAL_ADGL);
     }
@@ -724,6 +728,15 @@ mod tests {
     fn format_adgl_source_invalid_returns_err() {
         let err = format_adgl_source("ruleset \"x\" {").expect_err("broken ADGL must fail");
         assert!(matches!(err, FormatError::Adgl(_)));
+    }
+
+    #[test]
+    fn format_adgl_honors_indent_option() {
+        let src = r#"ruleset "x"{version="1.0"evidence r{scope:Session anchor a:event(tcp.retransmission_burst)}}"#;
+        let out = format_adgl_source_with(src, &FormatOptions { indent: 2 }).unwrap();
+        assert!(out.contains("\n  version = \"1.0\"\n"));
+        assert!(out.contains("\n  evidence r {\n"));
+        assert!(out.contains("\n    scope: Session\n"));
     }
 
     #[test]
@@ -750,6 +763,79 @@ mod tests {
             );
         }
         assert!(saw >= 5, "expected several .nfdl examples, saw {saw}");
+    }
+
+    #[test]
+    fn format_adgl_idea_examples_are_idempotent() {
+        let examples_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/idea/examples");
+        let mut saw = 0usize;
+        for entry in std::fs::read_dir(&examples_dir).expect("docs/idea/examples") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("adgl") {
+                continue;
+            }
+            saw += 1;
+            let src = std::fs::read_to_string(&path).expect("read example");
+            let once = format_adgl_source(&src)
+                .unwrap_or_else(|e| panic!("format {} failed: {e}", path.display()));
+            let twice = format_adgl_source(&once)
+                .unwrap_or_else(|e| panic!("re-format {} failed: {e}", path.display()));
+            assert_eq!(
+                once,
+                twice,
+                "idempotence failed for {}",
+                path.display()
+            );
+        }
+        assert!(
+            saw >= 10,
+            "expected all idea .adgl examples, saw {saw}"
+        );
+    }
+
+    #[test]
+    fn format_adgl_parent_diagnostics_idempotent_when_reachable() {
+        // Optional: parent AirPulse data/diagnostics/*.adgl (four levels up from crate).
+        let diagnostics_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../data/diagnostics");
+        let Ok(entries) = std::fs::read_dir(&diagnostics_dir) else {
+            return;
+        };
+        let mut saw = 0usize;
+        for entry in entries {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("adgl") {
+                continue;
+            }
+            let src = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let Ok(once) = format_adgl_source(&src) else {
+                // Parent pack may include files outside current parser surface.
+                continue;
+            };
+            saw += 1;
+            let twice = format_adgl_source(&once)
+                .unwrap_or_else(|e| panic!("re-format {} failed: {e}", path.display()));
+            assert_eq!(
+                once,
+                twice,
+                "idempotence failed for {}",
+                path.display()
+            );
+        }
+        // Soft check: if the directory exists we expect at least one parseable file.
+        if diagnostics_dir.is_dir() {
+            assert!(
+                saw >= 1,
+                "expected at least one parseable parent .adgl under {}",
+                diagnostics_dir.display()
+            );
+        }
     }
 
     #[test]
@@ -792,6 +878,30 @@ protocol P {
         assert!(out.find("// head").unwrap() < proto_pos);
         assert!(out.find("// inside").unwrap() < proto_pos);
         let twice = format_nfdl_source(&out).unwrap();
+        assert_eq!(out, twice);
+    }
+
+    #[test]
+    fn format_adgl_floats_comments_to_file_head() {
+        let src = r#"
+// head
+ruleset "x" {
+    /* mid */
+    version = "1.0"
+    evidence r {
+        scope: Session
+        anchor a: event(tcp.retransmission_burst) // trail
+    }
+}
+"#;
+        let out = format_adgl_source(src).unwrap();
+        assert!(out.starts_with("// head\n"));
+        assert!(out.contains("/* mid */\n"));
+        assert!(out.contains("// trail\n"));
+        let ruleset_pos = out.find("ruleset ").unwrap();
+        assert!(out.find("// head").unwrap() < ruleset_pos);
+        assert!(out.find("/* mid */").unwrap() < ruleset_pos);
+        let twice = format_adgl_source(&out).unwrap();
         assert_eq!(out, twice);
     }
 }

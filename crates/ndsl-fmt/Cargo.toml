@@ -6,6 +6,7 @@ rust-version = "1.85"
 
 [dependencies]
 airpulse_dsl-syntax = { path = "../airpulse_dsl-syntax" }
+airpulse_dsl-types = { path = "../airpulse_dsl-types" }
 ndsl-diag = { path = "../ndsl-diag" }
 ndsl-trivia = { path = "../ndsl-trivia" }
 nfdl-syntax = { path = "../nfdl-syntax" }

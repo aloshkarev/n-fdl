@@ -280,6 +280,7 @@ name = "ndsl-fmt"
 version = "0.1.0"
 dependencies = [
  "airpulse_dsl-syntax",
+ "airpulse_dsl-types",
  "ndsl-diag",
  "ndsl-trivia",
  "nfdl-syntax",
