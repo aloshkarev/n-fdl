@@ -16,14 +16,16 @@
 //! only requires splitting the diagnostics/sink accumulation per partition
 //! and merging by `(event_time, rule_decl_order, scope_id)` (ADR-012).
 //!
-//! # Offline watermark policy
+//! # Watermark policy (`08` §2 / ADR-004)
 //!
-//! [`Engine::ingest`] advances the watermark to the event time first
-//! (`08` §2.1 offline: `wm = max seen event-time`), then runs the resume
-//! sweep, GC, and finally anchor-matches the new event. A backward-only rule
-//! therefore sees `upper == wm` at its own anchor event and executes
-//! immediately (`03` §3.1 / Example 8); a forward window gives
-//! `upper > wm` ⇒ suspend.
+//! - **Offline:** [`Engine::ingest`] advances `wm = max(seen event-time)`,
+//!   then resume / GC / anchor-match. Out-of-order events with
+//!   `time ≤ wm` are accepted; if a matching correlate already resolved
+//!   absent, the engine audits `ADGL3002 LateEvidence` and does **not**
+//!   retroactively re-infer (append-only provenance, `08` §4).
+//! - **Live:** `wm = max(prev, t - W)` per source with idle-source
+//!   exclusion (`08` §2.2–§2.3). Late events beyond `allowed_lateness`
+//!   are dropped to [`Engine::late_side_output`] with `ADGL3003`.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -40,8 +42,8 @@ use airpulse_dsl_store::{
     EvidenceEdgeKind, GraphStore, Limits, ProblemNode, RuntimeProvKey, window_id,
 };
 use airpulse_dsl_types::{
-    ActionKind, CauseKind, Confidence, DurationMs, EventTime, MetricPath, NodeId, ProblemKind,
-    RuleId, SarifId, ScopeId, Severity, T3, Weight,
+    ActionKind, CauseKind, Confidence, DurationMs, EventTime, EventType, MetricPath, NodeId,
+    ProblemKind, RuleId, SarifId, ScopeId, Severity, T3, Weight,
 };
 
 use crate::binding::{Binding, Bound, CauseSnapshot, ProblemSnapshot};
@@ -67,7 +69,25 @@ const fn mix_target(expr_hash: u64, target_key: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The offline execution engine (`07-runtime.md` §5).
+/// A correlate that resolved `absent` and whose window is closed — used to
+/// detect offline late evidence (`08` §4 `ADGL3002`).
+#[derive(Debug, Clone)]
+struct ResolvedAbsent {
+    scope: ScopeId,
+    rule: RuleId,
+    event_type: EventType,
+    lo: EventTime,
+    hi: EventTime,
+}
+
+/// Per-source live watermark state (`08` §2.2–§2.3).
+#[derive(Debug, Clone, Copy)]
+struct SourceWm {
+    local_wm: EventTime,
+    last_seen_wall: EventTime,
+}
+
+/// The ADGL execution engine (`07-runtime.md` §5).
 ///
 /// Owns a [`GraphStore`] plus a verified [`ProgramImage`], a topology
 /// oracle, and an action sink. See the module docs for the concurrency and
@@ -99,6 +119,15 @@ pub struct Engine<'img, T, S> {
     finished: bool,
     suspended: u64,
     resumed: u64,
+    /// Live late-event side-output (`08` §4 `ADGL3003`).
+    late_side_output: Vec<EventNode>,
+    /// Offline resolved-absent correlate windows for late-evidence audit.
+    resolved_absent: Vec<ResolvedAbsent>,
+    /// Live per-source watermark / idle tracking (`08` §2.3).
+    sources: HashMap<ScopeId, SourceWm>,
+    /// Wall-clock used for idle-source detection (live). Advanced by
+    /// ingest event-time and [`Engine::advance_wall_clock`].
+    wall_clock: EventTime,
 }
 
 impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
@@ -130,6 +159,10 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             finished: false,
             suspended: 0,
             resumed: 0,
+            late_side_output: Vec::new(),
+            resolved_absent: Vec::new(),
+            sources: HashMap::new(),
+            wall_clock: EventTime::from_millis(i64::MIN),
         }
     }
 
@@ -199,6 +232,24 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         self.resumed
     }
 
+    /// Live late-event side-output (`08` §4): events dropped with
+    /// `ADGL3003 LateEventDropped`. Empty in offline mode.
+    #[must_use]
+    pub fn late_side_output(&self) -> &[EventNode] {
+        &self.late_side_output
+    }
+
+    /// Advances the live wall-clock used for idle-source detection
+    /// (`08` §2.3). Monotone: a smaller `t` is a no-op. Offline ignores this.
+    pub fn advance_wall_clock(&mut self, t: EventTime) {
+        if self.mode != RunMode::Live {
+            return;
+        }
+        if self.wall_clock.millis() == i64::MIN || t > self.wall_clock {
+            self.wall_clock = t;
+        }
+    }
+
     /// Final graph state (causes + problems) in deterministic order
     /// (ADR-012); audit is left empty — sinks own their logs (see
     /// [`Engine::snapshot`] for the offline-audit engine).
@@ -260,23 +311,142 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
 
     // ── pipeline (07 §5) ─────────────────────────────────────────────────
 
-    /// Ingests one event: offline watermark advance (`08` §2.1), resume
-    /// sweep + GC, ring routing, then anchor matching (`03` §3.1) with
-    /// suspend-or-run placement (`08` §3.1: `upper > wm` ⇒ suspend;
-    /// `upper == wm` backward-only ⇒ immediate).
+    /// Ingests one event under the configured [`RunMode`] watermark policy
+    /// (`08` §2 / §4): offline max-seen + late-evidence audit; live
+    /// bounded-out-of-orderness with idle-source and late drop to
+    /// side-output. Then resume sweep + GC + anchor matching.
     pub fn ingest(&mut self, event: EventNode) {
         let scope = event.scope;
         self.touched.insert(scope);
         self.interner.intern(scope);
         self.last_event_time = Some(self.last_event_time.unwrap_or(event.time).max(event.time));
 
-        let wm = self.store.advance_watermark(event.time);
+        let prev_wm = self.store.watermark();
+        let watermark_initialized = prev_wm.millis() != i64::MIN;
+        let is_late = watermark_initialized && event.time <= prev_wm;
+
+        if self.mode == RunMode::Live && is_late {
+            let cutoff = prev_wm.sub(self.store.limits().allowed_lateness);
+            if event.time <= cutoff {
+                self.diagnostics.push(EngineDiagnostic::LateEventDropped {
+                    scope,
+                    event: event.id,
+                    time: event.time,
+                    wm: prev_wm,
+                });
+                self.late_side_output.push(event);
+                return;
+            }
+            // Within allowed_lateness: fall through and accept.
+        }
+
+        if self.mode == RunMode::Offline && is_late {
+            self.audit_offline_late_evidence(&event, prev_wm);
+        }
+
+        let wm = match self.mode {
+            RunMode::Offline => self.store.advance_watermark(event.time),
+            RunMode::Live => self.advance_live_watermark(scope, event.time),
+        };
+
         if let Some(d) = self.store.push_event(event.clone()) {
             self.diagnostics.push(EngineDiagnostic::Store(d));
         }
         self.resume_expired(wm);
         self.gc_sweep(wm);
         self.match_anchors(&event, wm);
+    }
+
+    /// Live per-source watermark advance with idle-source exclusion
+    /// (`08` §2.2–§2.3).
+    fn advance_live_watermark(&mut self, scope: ScopeId, event_time: EventTime) -> EventTime {
+        // Wall-clock tracks the live stream by default (event-time), and may
+        // be pushed ahead via `advance_wall_clock` for idle tests.
+        if self.wall_clock.millis() == i64::MIN || event_time > self.wall_clock {
+            self.wall_clock = event_time;
+        }
+        let wall = self.wall_clock;
+        let w = self.store.limits().max_disorder;
+        let candidate = event_time.sub(w);
+        let entry = self.sources.entry(scope).or_insert(SourceWm {
+            local_wm: candidate,
+            last_seen_wall: wall,
+        });
+        if candidate > entry.local_wm {
+            entry.local_wm = candidate;
+        }
+        entry.last_seen_wall = wall;
+
+        let idle = self.store.limits().idle_timeout;
+        let mut global: Option<EventTime> = None;
+        for src in self.sources.values() {
+            let idle_for = wall.millis().saturating_sub(src.last_seen_wall.millis());
+            if idle_for >= idle.millis() {
+                continue; // excluded from min
+            }
+            global = Some(match global {
+                Some(g) if src.local_wm < g => src.local_wm,
+                Some(g) => g,
+                None => src.local_wm,
+            });
+        }
+        // If every source is idle, keep the prior watermark (no regression).
+        let target = global.unwrap_or_else(|| self.store.watermark());
+        self.store.advance_watermark(target)
+    }
+
+    /// Offline `ADGL3002`: late event matches a previously resolved-absent
+    /// correlate window — audit only, no re-infer (`08` §4).
+    fn audit_offline_late_evidence(&mut self, event: &EventNode, wm: EventTime) {
+        for ra in &self.resolved_absent {
+            if ra.scope != event.scope || ra.event_type != event.event_type {
+                continue;
+            }
+            if event.time >= ra.lo && event.time <= ra.hi {
+                self.diagnostics.push(EngineDiagnostic::LateEvidence {
+                    scope: event.scope,
+                    rule: ra.rule.clone(),
+                    event: event.id,
+                    event_type: event.event_type.clone(),
+                    wm,
+                });
+                // One audit per late event is enough for the differential /
+                // SARIF incompleteFingerprints use case (08 §4).
+                break;
+            }
+        }
+    }
+
+    /// Records absent correlate windows after an else-branch fire so later
+    /// offline late evidence can be audited (`08` §4).
+    fn record_resolved_absent(
+        &mut self,
+        rule: &RuleInstance,
+        bindings: &[Binding],
+        anchor: &Bound,
+        scope: ScopeId,
+    ) {
+        let anchor_time = anchor.time();
+        for (idx, spec) in rule.correlates.iter().enumerate() {
+            let binding = bindings.get(idx + 1);
+            if !matches!(binding, Some(Binding::Absent)) {
+                continue;
+            }
+            let CorrelateSource::Event(event_type) = &spec.source else {
+                continue;
+            };
+            let (back, fwd) = match spec.window {
+                WindowProof::Calculable { back, forward } => (back, forward),
+                WindowProof::RuntimeCheck => continue,
+            };
+            self.resolved_absent.push(ResolvedAbsent {
+                scope,
+                rule: rule.id.clone(),
+                event_type: event_type.clone(),
+                lo: anchor_time.sub(back),
+                hi: anchor_time.add(fwd),
+            });
+        }
     }
 
     /// Explicit watermark advance (e.g. punctuation from the capture
@@ -416,6 +586,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     self.exec_intents(&bt.then_body, rule, &bindings, &anchor, scope, budget);
                 }
                 Some(T3::False) => {
+                    // Window closed with correlate(s) Absent → record for
+                    // offline late-evidence audit (`08` §4 ADGL3002).
+                    self.record_resolved_absent(rule, &bindings, &anchor, scope);
                     if let Some(else_body) = &bt.else_body {
                         self.exec_intents(else_body, rule, &bindings, &anchor, scope, budget);
                     }
