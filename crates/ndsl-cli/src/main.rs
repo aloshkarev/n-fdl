@@ -1,10 +1,12 @@
-//! Unified N-FDL + ADGL CLI skeleton (`parse` / `fmt` / `lint` / `check` / `run`).
+//! Unified N-FDL + ADGL CLI (`parse` / `fmt` / `lint` / `check` / `verify` / `run`).
 //!
-//! Manual argv dispatch (matches `nfdl-cli`); clap can land later if needed.
+//! - `check` — parse (+ ADGL `include` expand) and style lint only
+//! - `verify` — ADGL semantic AOT verify (`airpulse_dsl-verify`); not the same as `check`
 
 #![forbid(unsafe_code)]
 
-use airpulse_dsl_syntax::{RuleDecl, parse_ruleset};
+use airpulse_dsl_syntax::{RuleDecl, load_ruleset};
+use airpulse_dsl_verify::{render_diagnostics, verify_path};
 use ndsl_clippy::{LintLevel, LintStore, RenderFormat, render};
 use ndsl_fmt::{FormatError, format_adgl_source, format_nfdl_source};
 use nfdl_syntax::{ParseError, Parser};
@@ -26,8 +28,10 @@ fn usage() {
          ndsl-cli parse <file>\n  \
          ndsl-cli fmt [--check|--write] <paths...>\n  \
          ndsl-cli lint [--json] [--allow ID] [--deny ID] <paths...>\n  \
-         ndsl-cli check <paths...>\n  \
-         ndsl-cli run <nfdl> [hex]"
+         ndsl-cli check <paths...>          # parse (+ ADGL include) + style lint\n  \
+         ndsl-cli verify <adgl-paths...>    # ADGL semantic AOT verify (not lint)\n  \
+         ndsl-cli run <nfdl> [hex]\n\n  \
+         Note: `check` is not semantic verify — use `verify` for airpulse_dsl-verify."
     );
 }
 
@@ -86,61 +90,85 @@ fn cmd_parse(path: &Path) -> i32 {
         }
     };
 
-    let src = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: cannot read {}: {e}", path.display());
-            return 2;
-        }
-    };
-
     match lang {
-        Lang::Nfdl => match Parser::new(&src).parse_protocol() {
-            Ok(proto) => {
-                println!(
-                    "ok: nfdl {} (messages={}, state_machines={})",
-                    proto.name,
-                    proto.messages.len(),
-                    proto.state_machines.len()
-                );
-                0
-            }
-            Err(e) => {
-                print_nfdl_parse_error(&e);
-                1
-            }
-        },
-        Lang::Adgl => match parse_ruleset(&src) {
-            Ok(ruleset) => {
-                let evidence = ruleset
-                    .rules
-                    .iter()
-                    .filter(|r| matches!(r, RuleDecl::Evidence(_)))
-                    .count();
-                let decisions = ruleset.rules.len().saturating_sub(evidence);
-                println!(
-                    "ok: adgl {} (rules={}, evidence={}, decisions={})",
-                    ruleset.name.value,
-                    ruleset.rules.len(),
-                    evidence,
-                    decisions
-                );
-                0
-            }
-            Err(buf) => {
-                let rendered = buf.render(&src, &path.display().to_string());
-                if rendered.is_empty() {
-                    eprintln!(
-                        "{}: ADGL parse failed ({} diagnostic(s))",
-                        path.display(),
-                        buf.len()
-                    );
-                } else {
-                    eprint!("{rendered}");
+        Lang::Nfdl => {
+            let src = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: cannot read {}: {e}", path.display());
+                    return 2;
                 }
-                1
+            };
+            match Parser::new(&src).parse_protocol() {
+                Ok(proto) => {
+                    println!(
+                        "ok: nfdl {} (messages={}, state_machines={})",
+                        proto.name,
+                        proto.messages.len(),
+                        proto.state_machines.len()
+                    );
+                    0
+                }
+                Err(e) => {
+                    print_nfdl_parse_error(&e);
+                    1
+                }
             }
-        },
+        }
+        Lang::Adgl => {
+            // Prefer path loader so leading `include` expands (parse_ruleset alone rejects it).
+            let loaded = match load_ruleset(path) {
+                Ok(l) => l,
+                Err(buf) => {
+                    let rendered = buf.render("", &path.display().to_string());
+                    if rendered.is_empty() {
+                        eprintln!(
+                            "{}: ADGL load failed ({} diagnostic(s))",
+                            path.display(),
+                            buf.len()
+                        );
+                        for d in buf.iter() {
+                            eprintln!("{}: {}: {}", d.code, d.severity, d.message);
+                        }
+                    } else {
+                        eprint!("{rendered}");
+                    }
+                    return 1;
+                }
+            };
+            match loaded.parse() {
+                Ok(ruleset) => {
+                    let evidence = ruleset
+                        .rules
+                        .iter()
+                        .filter(|r| matches!(r, RuleDecl::Evidence(_)))
+                        .count();
+                    let decisions = ruleset.rules.len().saturating_sub(evidence);
+                    println!(
+                        "ok: adgl {} (rules={}, evidence={}, decisions={}, files={})",
+                        ruleset.name.value,
+                        ruleset.rules.len(),
+                        evidence,
+                        decisions,
+                        loaded.files.len()
+                    );
+                    0
+                }
+                Err(buf) => {
+                    let rendered = buf.render(&loaded.source, &path.display().to_string());
+                    if rendered.is_empty() {
+                        eprintln!(
+                            "{}: ADGL parse failed ({} diagnostic(s))",
+                            path.display(),
+                            buf.len()
+                        );
+                    } else {
+                        eprint!("{rendered}");
+                    }
+                    1
+                }
+            }
+        }
     }
 }
 
@@ -317,7 +345,57 @@ fn cmd_check(paths: &[PathBuf]) -> i32 {
         }
     }
     if exit == 0 {
-        println!("check: ok ({} path(s))", paths.len());
+        println!(
+            "check: ok ({} path(s); parse+lint only — use `verify` for ADGL semantics)",
+            paths.len()
+        );
+    }
+    exit
+}
+
+/// ADGL semantic AOT verify (`airpulse_dsl-verify`), including `include` expansion.
+fn cmd_verify(paths: &[PathBuf]) -> i32 {
+    if paths.is_empty() {
+        usage();
+        return 1;
+    }
+
+    let mut exit = 0i32;
+    for path in paths {
+        if detect_lang(path) != Some(Lang::Adgl) {
+            eprintln!("error: verify expects .adgl files, got {}", path.display());
+            exit = 2;
+            continue;
+        }
+        match verify_path(path) {
+            Ok(verified) => {
+                println!(
+                    "ok: verify {} (rules={})",
+                    path.display(),
+                    verified.image.rules.len()
+                );
+            }
+            Err(buf) => {
+                // Prefer composed source when load succeeded far enough; fall back to disk.
+                let src = load_ruleset(path)
+                    .map(|l| l.source)
+                    .unwrap_or_else(|_| fs::read_to_string(path).unwrap_or_default());
+                let rendered = render_diagnostics(&src, &path.display().to_string(), &buf);
+                if rendered.is_empty() {
+                    eprintln!(
+                        "{}: ADGL verify failed ({} diagnostic(s))",
+                        path.display(),
+                        buf.len()
+                    );
+                    for d in buf.iter() {
+                        eprintln!("{}: {}: {}", d.code, d.severity, d.message);
+                    }
+                } else {
+                    eprint!("{rendered}");
+                }
+                exit = 1;
+            }
+        }
     }
     exit
 }
@@ -494,6 +572,10 @@ fn main() {
         "check" => {
             let paths: Vec<PathBuf> = args[2..].iter().map(PathBuf::from).collect();
             cmd_check(&paths)
+        }
+        "verify" => {
+            let paths: Vec<PathBuf> = args[2..].iter().map(PathBuf::from).collect();
+            cmd_verify(&paths)
         }
         "run" => {
             if args.len() < 3 || args.len() > 4 {

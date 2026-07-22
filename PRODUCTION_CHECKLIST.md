@@ -37,10 +37,13 @@ Matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
 ```bash
 cargo build -p nfdl-cli
+cargo build -p ndsl-cli
 cargo test -p nfdl-syntax
 cargo test -p nfdl-runtime --test fsm_integration
 cargo test -p airpulse_dsl-syntax
 cargo test -p ndsl-clippy
+# ADGL: `ndsl-cli check` = parse+lint; `ndsl-cli verify` = semantic AOT verify
+cargo run -p ndsl-cli -- verify docs/idea/examples/01-pmtud-blackhole.adgl
 ```
 
 ## Dual-track reminder

@@ -9,8 +9,9 @@ use airpulse_dsl_types::{
     ScopeId, ScopeType, Severity, Weight,
 };
 use airpulse_dsl_verify::{
-    VerifyConfig, render_diagnostics, verify_source, verify_source_with_config,
+    VerifyConfig, render_diagnostics, verify_path, verify_source, verify_source_with_config,
 };
+use std::path::PathBuf;
 
 fn t(ms: i64) -> EventTime {
     EventTime::from_millis(ms)
@@ -676,5 +677,25 @@ ruleset "test.int_list_predicates" {
         err.iter().any(|d| d.code == "ADGL0213"),
         "expected ADGL0213, got {:?}",
         err
+    );
+}
+
+#[test]
+fn verify_path_loads_single_file_examples() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/idea/examples/01-pmtud-blackhole.adgl");
+    let verified = verify_path(&path).expect("example 01 verifies via path loader");
+    assert_eq!(verified.image.rules.len(), 2);
+}
+
+#[test]
+fn verify_path_reports_include_cycle_before_semantics() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../airpulse_dsl-syntax/tests/fixtures/include/cycle/a.adgl");
+    let err = verify_path(&path).expect_err("cyclic include must fail");
+    assert!(
+        err.iter().any(|d| d.code == "ADGL4000"),
+        "expected ADGL4000 IncludeCycle, got {:?}",
+        err.iter().map(|d| d.code).collect::<Vec<_>>()
     );
 }

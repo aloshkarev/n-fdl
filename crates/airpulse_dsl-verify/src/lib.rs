@@ -20,13 +20,14 @@ use airpulse_dsl_syntax::ast::{
     CorrelateSource as AstCorrelateSource, DecisionAnchor, Decl, EmitField, EmitStmt, Expr,
     ExprKind, InferField, InferStmt, KindIdent, RuleDecl, Ruleset, Stmt, UnaryOp,
 };
-use airpulse_dsl_syntax::parse_ruleset;
+use airpulse_dsl_syntax::{load_ruleset, parse_ruleset};
 use airpulse_dsl_types::{
     ActionKind, Capability, CauseKind, DurationMs, EventType, MetricPath, ProblemKind, RuleId,
     ScopeType, Severity, Weight, stable_hash_u64, stable_string_i64,
 };
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
+use std::path::Path;
 
 const DEFAULT_MAX_LOOKBACK_MS: i64 = 60_000;
 const DEFAULT_DEDUP_WINDOW_MS: i64 = 1_000;
@@ -120,6 +121,25 @@ pub fn verify_source_with_config(
     config: VerifyConfig,
 ) -> Result<VerifiedProgram, DiagBuffer> {
     let ast = parse_ruleset(src)?;
+    verify_with_config(&ast, config)
+}
+
+/// Loads an ADGL path (resolving leading `include`s), verifies, and lowers to IR.
+///
+/// Prefer this over [`verify_source`] for on-disk rulesets that may compose
+/// multiple files via [`load_ruleset`]. Single-file sources without `include`
+/// still work. Dual-track: uses the Rust loader/parser only (not tree-sitter).
+pub fn verify_path(path: impl AsRef<Path>) -> Result<VerifiedProgram, DiagBuffer> {
+    verify_path_with_config(path, VerifyConfig::default())
+}
+
+/// Like [`verify_path`] with an explicit [`VerifyConfig`].
+pub fn verify_path_with_config(
+    path: impl AsRef<Path>,
+    config: VerifyConfig,
+) -> Result<VerifiedProgram, DiagBuffer> {
+    let loaded = load_ruleset(path)?;
+    let ast = loaded.parse()?;
     verify_with_config(&ast, config)
 }
 
