@@ -559,7 +559,9 @@ fn emit_expr(out: &mut String, expr: &Expr, parent_prec: u8) {
         Expr::Str(s) => emit_string_lit(out, s),
         Expr::Unary { op, expr } => {
             out.push_str(unary_str(op));
-            emit_expr(out, expr, 12);
+            // Unary and Mul/Div/Mod share prec 12; demand >12 so `!(a*b)` keeps parens
+            // (same fix as ADGL `emit_expr` for Unary).
+            emit_expr(out, expr, 13);
         }
         Expr::Binary { op, left, right } => {
             let p = binop_prec(op);
@@ -737,6 +739,37 @@ mod tests {
         assert!(out.contains("\n  version = \"1.0\"\n"));
         assert!(out.contains("\n  evidence r {\n"));
         assert!(out.contains("\n    scope: Session\n"));
+    }
+
+    #[test]
+    fn format_nfdl_keeps_parens_for_unary_over_mul() {
+        // Unary and Mul share prec 12; without raising unary-child parent prec,
+        // `!(a * b)` prints as `!a * b` and re-parses as `(!a) * b`.
+        let src = r#"
+protocol P {
+    meta {
+        endian = big;
+        mode = datagram;
+    }
+
+    message M {
+        a: u8;
+        b: u8;
+        validate !(a * b);
+    }
+}
+"#;
+        let out = format_nfdl_source(src).expect("valid N-FDL must parse");
+        assert!(
+            out.contains("!(a * b)"),
+            "unary-over-mul must keep parens; got:\n{out}"
+        );
+        assert!(
+            !out.contains("!a * b"),
+            "must not drop parens into `!a * b`; got:\n{out}"
+        );
+        let twice = format_nfdl_source(&out).expect("re-format");
+        assert_eq!(out, twice);
     }
 
     #[test]
