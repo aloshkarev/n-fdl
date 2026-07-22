@@ -67,6 +67,10 @@ struct ParseErr {
     code: &'static str,
     message: Cow<'static, str>,
     expected: Cow<'static, str>,
+    /// What was actually seen at the error span, when known.
+    found: Option<Cow<'static, str>>,
+    /// Short recovery hint (e.g. `did you mean \`evidence\`?`).
+    help: Option<Cow<'static, str>>,
     span: Span,
 }
 
@@ -81,8 +85,20 @@ impl ParseErr {
             code,
             message: message.into(),
             expected: expected.into(),
+            found: None,
+            help: None,
             span,
         }
+    }
+
+    fn found(mut self, found: impl Into<Cow<'static, str>>) -> Self {
+        self.found = Some(found.into());
+        self
+    }
+
+    fn help(mut self, help: impl Into<Cow<'static, str>>) -> Self {
+        self.help = Some(help.into());
+        self
     }
 }
 
@@ -188,11 +204,106 @@ fn diag_from_err(err: ParseErr) -> DiagBuffer {
 }
 
 fn diag_of(err: ParseErr) -> Diagnostic {
-    Diagnostic::error(
-        err.code,
-        format!("{} (expected: {})", err.message, err.expected),
-        err.span,
-    )
+    let mut msg = match &err.found {
+        Some(found) => format!(
+            "{} (expected: {}, found: {})",
+            err.message, err.expected, found
+        ),
+        None => format!("{} (expected: {})", err.message, err.expected),
+    };
+    if let Some(help) = &err.help {
+        msg.push_str("; ");
+        msg.push_str(help);
+    }
+    Diagnostic::error(err.code, msg, err.span)
+}
+
+fn describe_token_kind(kind: &TokenKind<'_>) -> Cow<'static, str> {
+    match kind {
+        TokenKind::Ident(s) => Cow::Owned((*s).to_string()),
+        TokenKind::String(_) => Cow::Borrowed("string literal"),
+        TokenKind::Int(v) => Cow::Owned(v.to_string()),
+        TokenKind::Duration(ms) => Cow::Owned(format!("{ms}ms")),
+        TokenKind::LBrace => Cow::Borrowed("{"),
+        TokenKind::RBrace => Cow::Borrowed("}"),
+        TokenKind::LParen => Cow::Borrowed("("),
+        TokenKind::RParen => Cow::Borrowed(")"),
+        TokenKind::LBracket => Cow::Borrowed("["),
+        TokenKind::RBracket => Cow::Borrowed("]"),
+        TokenKind::Colon => Cow::Borrowed(":"),
+        TokenKind::Comma => Cow::Borrowed(","),
+        TokenKind::Dot => Cow::Borrowed("."),
+        TokenKind::Eq => Cow::Borrowed("="),
+        TokenKind::Plus => Cow::Borrowed("+"),
+        TokenKind::Minus => Cow::Borrowed("-"),
+        TokenKind::Star => Cow::Borrowed("*"),
+        TokenKind::Slash => Cow::Borrowed("/"),
+        TokenKind::Percent => Cow::Borrowed("%"),
+        TokenKind::Bang => Cow::Borrowed("!"),
+        TokenKind::Lt => Cow::Borrowed("<"),
+        TokenKind::Le => Cow::Borrowed("<="),
+        TokenKind::Gt => Cow::Borrowed(">"),
+        TokenKind::Ge => Cow::Borrowed(">="),
+        TokenKind::EqEq => Cow::Borrowed("=="),
+        TokenKind::Ne => Cow::Borrowed("!="),
+        TokenKind::AndAnd => Cow::Borrowed("&&"),
+        TokenKind::OrOr => Cow::Borrowed("||"),
+        TokenKind::Kw(k) => Cow::Borrowed(*k),
+        TokenKind::Eof => Cow::Borrowed("end of input"),
+    }
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Suggest a keyword/candidate when `found` is a near miss (edit distance ≤ 2).
+fn suggest_near_miss(found: &str, candidates: &[&'static str]) -> Option<&'static str> {
+    let found = found.trim();
+    if found.is_empty() || found == "end of input" {
+        return None;
+    }
+    let mut best: Option<(&'static str, usize)> = None;
+    for &cand in candidates {
+        let d = levenshtein(found, cand);
+        if d == 0 || d > 2 {
+            continue;
+        }
+        // Prefer shorter edits; tie-break on shorter candidate name.
+        let better = match best {
+            None => true,
+            Some((prev, prev_d)) => d < prev_d || (d == prev_d && cand.len() < prev.len()),
+        };
+        if better {
+            best = Some((cand, d));
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
+fn help_did_you_mean(candidate: &str) -> String {
+    format!("did you mean `{candidate}`?")
 }
 
 // ============================================================================
@@ -970,12 +1081,22 @@ impl<'a> ParserState<'a> {
                 let _ = self.next();
                 Ok(sp)
             }
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                format!("expected keyword '{kw}'"),
-                kw,
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let mut err = ParseErr::new(
+                    "ADGL0100",
+                    format!("expected keyword '{kw}'"),
+                    kw,
+                    self.peek().span,
+                )
+                .found(found.clone());
+                if let Some(s) = suggest_near_miss(found.as_ref(), &[kw]) {
+                    err = err.help(help_did_you_mean(s));
+                } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
+                    err = err.help(help_did_you_mean(s));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -991,12 +1112,20 @@ impl<'a> ParserState<'a> {
                 let _ = self.next();
                 Ok(sp)
             }
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                format!("expected '{word}'"),
-                word,
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let mut err = ParseErr::new(
+                    "ADGL0100",
+                    format!("expected '{word}'"),
+                    word,
+                    self.peek().span,
+                )
+                .found(found.clone());
+                if let Some(s) = suggest_near_miss(found.as_ref(), &[word]) {
+                    err = err.help(help_did_you_mean(s));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -1009,12 +1138,20 @@ impl<'a> ParserState<'a> {
             let _ = self.next();
             Ok(tok)
         } else {
-            Err(ParseErr::new(
+            let found = describe_token_kind(self.peek_kind());
+            let mut err = ParseErr::new(
                 "ADGL0100",
                 "unexpected token",
                 expected,
                 self.peek().span,
-            ))
+            )
+            .found(found.clone());
+            if expected == ":" {
+                err = err.help("expected `:` after field name");
+            } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
+                err = err.help(help_did_you_mean(s));
+            }
+            Err(err)
         }
     }
 
@@ -1302,12 +1439,20 @@ impl<'a> ParserState<'a> {
                     span: Span::new(start, end),
                 }))
             }
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                "expected Cause(...) or Problem(...)",
-                "Cause/Problem anchor",
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let help = suggest_near_miss(found.as_ref(), &["Cause", "Problem"])
+                    .map(help_did_you_mean)
+                    .unwrap_or_else(|| "use Cause(Name) or Problem(Name)".into());
+                Err(ParseErr::new(
+                    "ADGL0100",
+                    "expected Cause(...) or Problem(...)",
+                    "Cause/Problem anchor",
+                    self.peek().span,
+                )
+                .found(found)
+                .help(help))
+            }
         }
     }
 
@@ -1468,12 +1613,22 @@ impl<'a> ParserState<'a> {
             TokenKind::Kw("infer") => Ok(Stmt::Infer(self.parse_infer_stmt()?)),
             TokenKind::Kw("emit") => Ok(Stmt::Emit(self.parse_emit_stmt()?)),
             TokenKind::Kw("action") => Ok(Stmt::Action(self.parse_action_stmt()?)),
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                "unexpected statement",
-                "infer | emit | action",
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let mut err = ParseErr::new(
+                    "ADGL0100",
+                    "unexpected statement",
+                    "infer | emit | action",
+                    self.peek().span,
+                )
+                .found(found.clone());
+                if let Some(s) =
+                    suggest_near_miss(found.as_ref(), &["infer", "emit", "action", "if"])
+                {
+                    err = err.help(help_did_you_mean(s));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -1486,7 +1641,9 @@ impl<'a> ParserState<'a> {
                     "emit is not allowed in evidence rule body",
                     "infer | action",
                     stmt_span(&stmt),
-                ));
+                )
+                .found("emit")
+                .help("move `emit` into a decision rule"));
             }
         } else if matches!(stmt, Stmt::Infer(_)) {
             return Err(ParseErr::new(
@@ -1494,7 +1651,9 @@ impl<'a> ParserState<'a> {
                 "infer is not allowed in decision rule body",
                 "emit | action",
                 stmt_span(&stmt),
-            ));
+            )
+            .found("infer")
+            .help("move `infer` into an evidence rule"));
         }
         Ok(stmt)
     }
@@ -1848,12 +2007,29 @@ impl<'a> ParserState<'a> {
             let _ = self.next();
             Ok(sp)
         } else {
-            Err(ParseErr::new(
+            let found = describe_token_kind(self.peek_kind());
+            let mut err = ParseErr::new(
                 "ADGL0100",
                 "unexpected token",
                 expected,
                 self.peek().span,
-            ))
+            )
+            .found(found.clone());
+            if expected == "}" {
+                if let Some(s) = suggest_near_miss(
+                    found.as_ref(),
+                    &["evidence", "decision", "mutually_exclusive", "requires", "version"],
+                ) {
+                    err = err.help(help_did_you_mean(s));
+                }
+            } else if expected == ":" {
+                err = err.help("expected `:` after field name");
+            } else if expected == "=" {
+                err = err.help("expected `=` in assignment");
+            } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
+                err = err.help(help_did_you_mean(s));
+            }
+            Err(err)
         }
     }
 
@@ -2190,7 +2366,9 @@ impl<'a> ParserState<'a> {
                 "expected expression primary",
                 "literal | identifier | (expr)",
                 tok.span,
-            )),
+            )
+            .found(describe_token_kind(&tok.kind))
+            .help("start an expression with a literal, identifier, or `(`")),
         }
     }
 }

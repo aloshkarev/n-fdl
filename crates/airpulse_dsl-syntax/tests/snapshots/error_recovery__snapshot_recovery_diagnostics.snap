@@ -6,10 +6,10 @@ expression: summary
 [
     (
         "ADGL0450",
-        "emit is not allowed in evidence rule body (expected: infer | action)",
+        "emit is not allowed in evidence rule body (expected: infer | action, found: emit); move `emit` into a decision rule",
     ),
     (
         "ADGL0450",
-        "emit is not allowed in evidence rule body (expected: infer | action)",
+        "emit is not allowed in evidence rule body (expected: infer | action, found: emit); move `emit` into a decision rule",
     ),
 ]

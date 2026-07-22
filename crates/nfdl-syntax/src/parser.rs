@@ -201,7 +201,10 @@ impl<'a> Parser<'a> {
             if self.current == Token::Colon {
                 self.advance();
             } else {
-                return Err(ParseError::Syntax("expected : in ternary".into()));
+                return Err(ParseError::Syntax(format!(
+                    "expected `:` in ternary (expected: `:`, found: {}); tip: write `cond ? then : else`",
+                    token_label(&self.current)
+                )));
             }
             let else_branch = self.parse_expr()?;
             expr = Expr::Ternary {
@@ -540,8 +543,8 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 return Err(ParseError::Syntax(format!(
-                    "bad primary: {:?}",
-                    self.current
+                    "bad primary: expected expression, found {}; tip: start with ident, literal, or `(`",
+                    token_label(&self.current)
                 )));
             }
         };
@@ -618,9 +621,10 @@ impl<'a> Parser<'a> {
             Token::Ident(t) if t == "bitfield" => {
                 self.advance();
                 if self.current != Token::LBrace {
-                    return Err(ParseError::Syntax(
-                        "expected `{` after bitfield (BitfieldType = bitfield { INT })".into(),
-                    ));
+                    return Err(ParseError::Syntax(format!(
+                        "expected `{{` after bitfield (expected: `{{`, found: {}); did you mean `bitfield{{k}}`?",
+                        token_label(&self.current)
+                    )));
                 }
                 self.advance();
                 let bits = match &self.current {
@@ -634,7 +638,7 @@ impl<'a> Parser<'a> {
                                 self.advance();
                             }
                             return Err(ParseError::Syntax(format!(
-                                "bitfield width must be in 1..=64, got {v}"
+                                "bitfield width must be in 1..=64 (expected: integer 1..=64, found: {v}); tip: use e.g. bitfield{{8}}"
                             )));
                         }
                         v as u8
@@ -643,15 +647,17 @@ impl<'a> Parser<'a> {
                         if self.current == Token::RBrace {
                             self.advance();
                         }
-                        return Err(ParseError::Syntax(
-                            "expected INT bit width in bitfield{k}".into(),
-                        ));
+                        return Err(ParseError::Syntax(format!(
+                            "expected INT bit width in bitfield{{k}} (expected: integer 1..=64, found: {}); tip: write bitfield{{8}}",
+                            token_label(&self.current)
+                        )));
                     }
                 };
                 if self.current != Token::RBrace {
-                    return Err(ParseError::Syntax(
-                        "expected `}` after bitfield width".into(),
-                    ));
+                    return Err(ParseError::Syntax(format!(
+                        "expected `}}` after bitfield width (expected: `}}`, found: {})",
+                        token_label(&self.current)
+                    )));
                 }
                 self.advance();
                 Ok(NfdlType::Bitfield { bits })
@@ -1030,6 +1036,20 @@ impl<'a> Parser<'a> {
                     order: o,
                     span: self.field_span(ident_start),
                 });
+                if self.current == Token::Semicolon {
+                    self.advance();
+                } else if !matches!(
+                    self.current,
+                    Token::RBrace | Token::Eof | Token::Message | Token::Meta | Token::Validate
+                ) {
+                    if self.recover_reject(ParseError::Syntax(format!(
+                        "expected `;` after field (expected: `;`, found: {}); tip: terminate each field with `;`",
+                        token_label(&self.current)
+                    )))? {
+                        continue;
+                    }
+                }
+                continue;
             } else {
                 self.advance();
             }
@@ -1589,5 +1609,59 @@ protocol Demo {
         assert_eq!(proto.doc.as_deref(), Some("hello"));
         assert_eq!(proto.messages.len(), 1);
         assert_eq!(proto.messages[0].doc.as_deref(), Some("request PDU"));
+    }
+}
+
+fn token_label(tok: &Token) -> String {
+    match tok {
+        Token::Protocol => "protocol".into(),
+        Token::Message => "message".into(),
+        Token::Meta => "meta".into(),
+        Token::Endian => "endian".into(),
+        Token::Mode => "mode".into(),
+        Token::Big => "big".into(),
+        Token::Datagram => "datagram".into(),
+        Token::Validate => "validate".into(),
+        Token::Bind => "bind".into(),
+        Token::To => "to".into(),
+        Token::When => "when".into(),
+        Token::Ident(s) => s.clone(),
+        Token::Int(v) => v.to_string(),
+        Token::String(_) => "string literal".into(),
+        Token::LBrace => "{".into(),
+        Token::RBrace => "}".into(),
+        Token::LBracket => "[".into(),
+        Token::RBracket => "]".into(),
+        Token::LParen => "(".into(),
+        Token::RParen => ")".into(),
+        Token::Colon => ":".into(),
+        Token::Semicolon => ";".into(),
+        Token::Eq => "=".into(),
+        Token::Ne => "!=".into(),
+        Token::Dot => ".".into(),
+        Token::Minus => "-".into(),
+        Token::Plus => "+".into(),
+        Token::Star => "*".into(),
+        Token::Slash => "/".into(),
+        Token::Gt => ">".into(),
+        Token::Lt => "<".into(),
+        Token::Ge => ">=".into(),
+        Token::Le => "<=".into(),
+        Token::And => "&&".into(),
+        Token::Or => "||".into(),
+        Token::Arrow => "->".into(),
+        Token::Question => "?".into(),
+        Token::Coalesce => "??".into(),
+        Token::BitAnd => "&".into(),
+        Token::BitOr => "|".into(),
+        Token::BitXor => "^".into(),
+        Token::Shl => "<<".into(),
+        Token::Shr => ">>".into(),
+        Token::Mod => "%".into(),
+        Token::Bang => "!".into(),
+        Token::Tilde => "~".into(),
+        Token::Comma => ",".into(),
+        Token::Eof => "end of input".into(),
+        Token::Error(s) => format!("error({s})"),
     }
 }

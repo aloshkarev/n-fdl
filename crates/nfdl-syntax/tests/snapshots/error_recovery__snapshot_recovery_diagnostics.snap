@@ -6,10 +6,10 @@ expression: summary
 [
     (
         Error,
-        "bitfield width must be in 1..=64, got 0",
+        "bitfield width must be in 1..=64 (expected: integer 1..=64, found: 0); tip: use e.g. bitfield{8}",
     ),
     (
         Error,
-        "bitfield width must be in 1..=64, got 65",
+        "bitfield width must be in 1..=64 (expected: integer 1..=64, found: 65); tip: use e.g. bitfield{8}",
     ),
 ]
