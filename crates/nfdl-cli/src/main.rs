@@ -78,10 +78,10 @@ fn message_features(msg: &Message) -> (bool, bool, bool, bool, usize) {
         if let NfdlType::MessageRef(_) = field.ty {
             max_depth = max_depth.max(1);
         }
-        if let Some(cond) = &field.conditional {
-            if expr_has_modulo_padding(cond) {
-                has_padding = true;
-            }
+        if let Some(cond) = &field.conditional
+            && expr_has_modulo_padding(cond)
+        {
+            has_padding = true;
         }
     }
 
@@ -167,7 +167,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         .filter(|c| !c.is_whitespace() && *c != '_')
         .collect();
     let stripped = cleaned.strip_prefix("0x").unwrap_or(&cleaned);
-    if stripped.len() % 2 != 0 {
+    if !stripped.len().is_multiple_of(2) {
         return Err(format!("hex string has odd length ({})", stripped.len()));
     }
     (0..stripped.len())
@@ -235,7 +235,7 @@ fn cmd_parse(path: &str) -> Result<Protocol, ()> {
             println!("padding: {}", has_padding);
             println!("Max depth: {}", max_depth_seen);
             println!("Total fields: {}", total_fields);
-            println!("Limits enforced: {}", true);
+            println!("Limits enforced: true");
 
             println!("\n[Production AST]");
             println!("Protocol: {} (endian={})", proto.name, proto.endian);

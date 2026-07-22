@@ -1,6 +1,6 @@
 //! Stream NeedMoreBytes / continuation API (Task 25).
 
-use nfdl_runtime::{parse_stream_start, resume, StreamParseStep};
+use nfdl_runtime::{StreamParseStep, parse_stream_start, resume};
 
 fn tiny_stream_proto() -> &'static str {
     r#"
@@ -35,10 +35,7 @@ fn stream_start_yields_continuation_not_bare_error() {
             }
             .into_complete()
             .unwrap_err();
-            assert!(matches!(
-                err,
-                nfdl_runtime::RuntimeError::NeedMoreBytes
-            ));
+            assert!(matches!(err, nfdl_runtime::RuntimeError::NeedMoreBytes));
         }
         StreamParseStep::Done { .. } => panic!("expected NeedMoreBytes"),
     }

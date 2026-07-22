@@ -9,7 +9,7 @@ mod adgl;
 use ndsl_diag::DiagBuffer;
 use ndsl_trivia::TriviaKind;
 use nfdl_syntax::ast::{
-    Action, Bind, BinOp, Expr, Field, Let, Loop, Match, MatchArm, Message, NextStmt, NfdlType,
+    Action, BinOp, Bind, Expr, Field, Let, Loop, Match, MatchArm, Message, NextStmt, NfdlType,
     Protocol, State, StateMachine, Transition, UnaryOp, Validate,
 };
 use nfdl_syntax::{Lexer, ParseError, Parser, Token};
@@ -100,7 +100,10 @@ fn collect_comments(src: &str) -> Vec<String> {
     loop {
         let tok = lexer.next_token();
         for t in lexer.trivia_before_next_token() {
-            if matches!(t.kind, TriviaKind::LineComment | TriviaKind::DocComment | TriviaKind::BlockComment) {
+            if matches!(
+                t.kind,
+                TriviaKind::LineComment | TriviaKind::DocComment | TriviaKind::BlockComment
+            ) {
                 comments.push(t.text);
             }
         }
@@ -227,6 +230,7 @@ fn emit_message(out: &mut String, msg: &Message, opts: &FormatOptions, level: us
     out.push_str("}\n");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_body(
     out: &mut String,
     fields: &[Field],
@@ -816,12 +820,7 @@ ruleset "x" {
                 .unwrap_or_else(|e| panic!("format {} failed: {e}", path.display()));
             let twice = format_nfdl_source(&once)
                 .unwrap_or_else(|e| panic!("re-format {} failed: {e}", path.display()));
-            assert_eq!(
-                once,
-                twice,
-                "idempotence failed for {}",
-                path.display()
-            );
+            assert_eq!(once, twice, "idempotence failed for {}", path.display());
         }
         assert!(saw >= 5, "expected several .nfdl examples, saw {saw}");
     }
@@ -843,24 +842,16 @@ ruleset "x" {
                 .unwrap_or_else(|e| panic!("format {} failed: {e}", path.display()));
             let twice = format_adgl_source(&once)
                 .unwrap_or_else(|e| panic!("re-format {} failed: {e}", path.display()));
-            assert_eq!(
-                once,
-                twice,
-                "idempotence failed for {}",
-                path.display()
-            );
+            assert_eq!(once, twice, "idempotence failed for {}", path.display());
         }
-        assert!(
-            saw >= 10,
-            "expected all idea .adgl examples, saw {saw}"
-        );
+        assert!(saw >= 10, "expected all idea .adgl examples, saw {saw}");
     }
 
     #[test]
     fn format_adgl_parent_diagnostics_idempotent_when_reachable() {
         // Optional: parent AirPulse data/diagnostics/*.adgl (four levels up from crate).
-        let diagnostics_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../data/diagnostics");
+        let diagnostics_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../data/diagnostics");
         let Ok(entries) = std::fs::read_dir(&diagnostics_dir) else {
             return;
         };
@@ -882,12 +873,7 @@ ruleset "x" {
             saw += 1;
             let twice = format_adgl_source(&once)
                 .unwrap_or_else(|e| panic!("re-format {} failed: {e}", path.display()));
-            assert_eq!(
-                once,
-                twice,
-                "idempotence failed for {}",
-                path.display()
-            );
+            assert_eq!(once, twice, "idempotence failed for {}", path.display());
         }
         // Soft check: if the directory exists we expect at least one parseable file.
         if diagnostics_dir.is_dir() {

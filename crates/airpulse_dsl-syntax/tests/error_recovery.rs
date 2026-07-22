@@ -113,9 +113,6 @@ ruleset "Snap" {
 }
 "#;
     let err = parse_ruleset(src).expect_err("snapshot source must fail");
-    let summary: Vec<(&str, &str)> = err
-        .iter()
-        .map(|d| (d.code, d.message.as_str()))
-        .collect();
+    let summary: Vec<(&str, &str)> = err.iter().map(|d| (d.code, d.message.as_str())).collect();
     insta::assert_debug_snapshot!(summary);
 }

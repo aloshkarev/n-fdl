@@ -373,7 +373,10 @@ mod tests {
                 "Unknown must not collapse to False/True: {ans:?}"
             );
         }
-        assert!(topo.diagnostics().is_empty(), "Unknown is not a cycle/hop diagnostic");
+        assert!(
+            topo.diagnostics().is_empty(),
+            "Unknown is not a cycle/hop diagnostic"
+        );
     }
 
     #[test]

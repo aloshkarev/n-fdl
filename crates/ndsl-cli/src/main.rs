@@ -4,9 +4,9 @@
 
 #![forbid(unsafe_code)]
 
-use airpulse_dsl_syntax::{parse_ruleset, RuleDecl};
-use ndsl_clippy::{render, LintLevel, LintStore, RenderFormat};
-use ndsl_fmt::{format_adgl_source, format_nfdl_source, FormatError};
+use airpulse_dsl_syntax::{RuleDecl, parse_ruleset};
+use ndsl_clippy::{LintLevel, LintStore, RenderFormat, render};
+use ndsl_fmt::{FormatError, format_adgl_source, format_nfdl_source};
 use nfdl_syntax::{ParseError, Parser};
 use std::env;
 use std::fs;
@@ -226,12 +226,7 @@ fn cmd_fmt(mode: FmtMode, paths: &[PathBuf]) -> i32 {
     exit
 }
 
-fn cmd_lint(
-    paths: &[PathBuf],
-    format: RenderFormat,
-    allow: &[String],
-    deny: &[String],
-) -> i32 {
+fn cmd_lint(paths: &[PathBuf], format: RenderFormat, allow: &[String], deny: &[String]) -> i32 {
     if paths.is_empty() {
         usage();
         return 1;
@@ -305,7 +300,7 @@ fn cmd_check(paths: &[PathBuf]) -> i32 {
         }
         let mut store = LintStore::new();
         store.register_builtin();
-        match store.lint_paths(&[path.clone()]) {
+        match store.lint_paths(std::slice::from_ref(path)) {
             Ok(diags) if LintStore::has_deny(&diags) => {
                 let _ = render(&diags, RenderFormat::Human, io::stderr());
                 exit = 1;

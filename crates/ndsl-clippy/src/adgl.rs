@@ -159,7 +159,10 @@ fn collect_used_in_anchor<'a>(anchor: &'a AnchorBlock<'a>, used: &mut HashSet<&'
     }
 }
 
-fn collect_used_in_decision_anchor<'a>(anchor: &'a DecisionAnchor<'a>, used: &mut HashSet<&'a str>) {
+fn collect_used_in_decision_anchor<'a>(
+    anchor: &'a DecisionAnchor<'a>,
+    used: &mut HashSet<&'a str>,
+) {
     match anchor {
         DecisionAnchor::Cause(c) => collect_used_in_expr(&c.predicate, used),
         DecisionAnchor::Problem(p) => {
@@ -815,8 +818,10 @@ ruleset "test.rs" {{
         );
         let diags = lint(&src);
         assert!(
-            diags.iter().any(|d| d.diagnostic.id == ADGLS_UNUSED_CORRELATE
-                && d.diagnostic.message.contains("orphan")),
+            diags
+                .iter()
+                .any(|d| d.diagnostic.id == ADGLS_UNUSED_CORRELATE
+                    && d.diagnostic.message.contains("orphan")),
             "expected unused correlate, got: {:?}",
             diags
                 .iter()
@@ -908,10 +913,8 @@ ruleset "t" {
 "#;
         let diags = lint(src);
         assert!(
-            diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_FLOAT_LITERAL
-                    && d.diagnostic.message.contains("units-ABI")),
+            diags.iter().any(|d| d.diagnostic.id == ADGLS_FLOAT_LITERAL
+                && d.diagnostic.message.contains("units-ABI")),
             "expected float literal lint, got: {:?}",
             diags
                 .iter()
@@ -937,9 +940,7 @@ ruleset "t" {
         );
         let diags = lint(&src);
         assert!(
-            !diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_FLOAT_LITERAL),
+            !diags.iter().any(|d| d.diagnostic.id == ADGLS_FLOAT_LITERAL),
             "floats in comments/strings must not warn, got: {:?}",
             diags
                 .iter()
@@ -973,9 +974,7 @@ ruleset "t" {
         );
         let diags = lint(&src);
         assert!(
-            diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_EMPTY_HAVING),
+            diags.iter().any(|d| d.diagnostic.id == ADGLS_EMPTY_HAVING),
             "expected empty having lint, got: {:?}",
             diags
                 .iter()
@@ -1004,9 +1003,7 @@ ruleset "t" {
         );
         let diags = lint(&src);
         assert!(
-            !diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_EMPTY_HAVING),
+            !diags.iter().any(|d| d.diagnostic.id == ADGLS_EMPTY_HAVING),
             "having: count >= 30 must not warn, got: {:?}",
             diags
                 .iter()
@@ -1064,9 +1061,7 @@ ruleset "t" {
         );
         let diags = lint(&src);
         assert!(
-            !diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
+            !diags.iter().any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
             "zero-correlate counter-gap must not fire ADGLS0300, got: {:?}",
             diags
                 .iter()
@@ -1097,9 +1092,7 @@ ruleset "t" {
         );
         let diags = lint(&src);
         assert!(
-            !diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
+            !diags.iter().any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
             "absent(...) idiom must suppress ADGLS0300, got: {:?}",
             diags
                 .iter()
@@ -1130,9 +1123,7 @@ ruleset "t" {
         );
         let diags = lint(&src);
         assert!(
-            !diags
-                .iter()
-                .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
+            !diags.iter().any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
             "present(...) idiom must suppress ADGLS0300, got: {:?}",
             diags
                 .iter()

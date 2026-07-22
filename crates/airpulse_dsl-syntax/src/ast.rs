@@ -299,7 +299,7 @@ pub enum InferField<'a> {
     Evidence(Vec<Ident<'a>>, Span),
 }
 
-impl<'a> InferField<'a> {
+impl InferField<'_> {
     /// Returns `(value, span)` for `weight: (+|-) IntLit`.
     #[must_use]
     pub const fn weight_value(&self) -> Option<(i64, Span)> {

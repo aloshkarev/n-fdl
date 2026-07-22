@@ -1,5 +1,10 @@
 //! ADGL parser (`docs/idea/spec/02-grammar.ebnf`) implemented with winnow-powered lexing.
 
+// ParseErr grew with expected/found/help suggestions (Task 35); Result<_, ParseErr>
+// trips result_large_err across the recursive-descent surface — keep the rich
+// diagnostics rather than boxing every Err path.
+#![allow(clippy::result_large_err)]
+
 use std::borrow::Cow;
 
 use airpulse_dsl_types::{ActionKind, ScopeType, Severity};
@@ -142,7 +147,7 @@ const KEYWORDS: &[&str] = &[
 /// `mutually_exclusive` / `version` / `requires`), and continues so later errors
 /// accumulate in the same [`DiagBuffer`]. A successful AST is returned only when
 /// no diagnostics were recorded; otherwise `Err(buf)` carries every diagnostic.
-pub fn parse_ruleset<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
+pub fn parse_ruleset(src: &str) -> Result<Ruleset<'_>, DiagBuffer> {
     match tokenize(src) {
         Ok(tokens) => {
             let mut p = ParserState::new(tokens);
@@ -162,7 +167,7 @@ pub fn parse_ruleset<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
 
 /// Fail-fast variant: stops at the first syntax error (no rule/decl recovery).
 #[cfg(test)]
-fn parse_ruleset_fail_fast<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
+fn parse_ruleset_fail_fast(src: &str) -> Result<Ruleset<'_>, DiagBuffer> {
     match tokenize(src) {
         Ok(tokens) => match ParserState::new(tokens).parse_ruleset() {
             Ok(ast) => Ok(ast),
@@ -173,7 +178,7 @@ fn parse_ruleset_fail_fast<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> 
 }
 
 /// Parse an expression for precedence-focused tests.
-pub fn parse_expression<'a>(src: &'a str) -> Result<Expr<'a>, DiagBuffer> {
+pub fn parse_expression(src: &str) -> Result<Expr<'_>, DiagBuffer> {
     match tokenize(src) {
         Ok(tokens) => {
             let mut p = ParserState::new(tokens);
@@ -310,7 +315,7 @@ fn help_did_you_mean(candidate: &str) -> String {
 // Lexer / tokenizer
 // ============================================================================
 
-fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
+fn tokenize(src: &str) -> Result<Vec<Token<'_>>, ParseErr> {
     if src.len() > 4 * 1024 * 1024 {
         return Err(ParseErr::new(
             "ADGL0102",
@@ -320,7 +325,7 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
         ));
     }
 
-        let mut lx = Lexer::new(src);
+    let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     let mut depth: usize = 0;
     while !lx.is_eof() {
@@ -517,7 +522,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LBrace,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('}') => {
@@ -525,7 +530,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RBrace,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('(') => {
@@ -533,7 +538,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LParen,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some(')') => {
@@ -541,7 +546,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RParen,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('[') => {
@@ -549,7 +554,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LBracket,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some(']') => {
@@ -557,7 +562,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RBracket,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some(':') => {
@@ -565,7 +570,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Colon,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some(',') => {
@@ -573,7 +578,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Comma,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('.') => {
@@ -581,7 +586,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Dot,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('=') => {
@@ -589,7 +594,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Eq,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('+') => {
@@ -597,7 +602,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Plus,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('-') => {
@@ -605,7 +610,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Minus,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('*') => {
@@ -613,7 +618,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Star,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('/') => {
@@ -621,7 +626,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Slash,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('%') => {
@@ -629,7 +634,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Percent,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('!') => {
@@ -637,7 +642,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Bang,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('<') => {
@@ -645,7 +650,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Lt,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('>') => {
@@ -653,7 +658,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Gt,
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 })
             }
             Some('"') => self.lex_string(start),
@@ -716,7 +721,7 @@ impl<'a> Lexer<'a> {
         Ok(Token {
             kind,
             span: Span::new(start, self.pos),
-                leading: Vec::new(),
+            leading: Vec::new(),
         })
     }
 
@@ -824,7 +829,7 @@ impl<'a> Lexer<'a> {
         Ok(Token {
             kind: TokenKind::Int(value),
             span: Span::new(start, self.pos),
-                leading: Vec::new(),
+            leading: Vec::new(),
         })
     }
 
@@ -836,7 +841,7 @@ impl<'a> Lexer<'a> {
                 return Ok(Token {
                     kind: TokenKind::String(out),
                     span: Span::new(start, self.pos),
-                leading: Vec::new(),
+                    leading: Vec::new(),
                 });
             }
             if ch == '\\' {
@@ -1139,13 +1144,8 @@ impl<'a> ParserState<'a> {
             Ok(tok)
         } else {
             let found = describe_token_kind(self.peek_kind());
-            let mut err = ParseErr::new(
-                "ADGL0100",
-                "unexpected token",
-                expected,
-                self.peek().span,
-            )
-            .found(found.clone());
+            let mut err = ParseErr::new("ADGL0100", "unexpected token", expected, self.peek().span)
+                .found(found.clone());
             if expected == ":" {
                 err = err.help("expected `:` after field name");
             } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
@@ -2008,17 +2008,18 @@ impl<'a> ParserState<'a> {
             Ok(sp)
         } else {
             let found = describe_token_kind(self.peek_kind());
-            let mut err = ParseErr::new(
-                "ADGL0100",
-                "unexpected token",
-                expected,
-                self.peek().span,
-            )
-            .found(found.clone());
+            let mut err = ParseErr::new("ADGL0100", "unexpected token", expected, self.peek().span)
+                .found(found.clone());
             if expected == "}" {
                 if let Some(s) = suggest_near_miss(
                     found.as_ref(),
-                    &["evidence", "decision", "mutually_exclusive", "requires", "version"],
+                    &[
+                        "evidence",
+                        "decision",
+                        "mutually_exclusive",
+                        "requires",
+                        "version",
+                    ],
                 ) {
                     err = err.help(help_did_you_mean(s));
                 }
@@ -2541,7 +2542,12 @@ ruleset "Bad" {
 }
 "#;
         let err = parse_ruleset_fail_fast(src).expect_err("must fail");
-        assert_eq!(err.len(), 1, "fail-fast must not recover: {}", err.render(src, "ff.adgl"));
+        assert_eq!(
+            err.len(),
+            1,
+            "fail-fast must not recover: {}",
+            err.render(src, "ff.adgl")
+        );
         assert!(err.render(src, "ff.adgl").contains("ADGL0450"));
     }
 }

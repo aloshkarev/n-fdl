@@ -89,8 +89,7 @@ fn run_to_json(src: &str, data: &[u8]) -> Value {
 fn arp_hex_matches_expected_json() {
     let dir = golden_arp_dir();
     let hex_src = fs::read_to_string(dir.join("input.hex")).expect("read input.hex");
-    let expected_src =
-        fs::read_to_string(dir.join("expected.json")).expect("read expected.json");
+    let expected_src = fs::read_to_string(dir.join("expected.json")).expect("read expected.json");
     let expected: Value = serde_json::from_str(&expected_src).expect("parse expected.json");
 
     let pkt = parse_hex_file(&hex_src);
@@ -100,7 +99,8 @@ fn arp_hex_matches_expected_json() {
     let actual = run_to_json(nfdl, &pkt);
 
     assert_eq!(
-        actual, expected,
+        actual,
+        expected,
         "ARP golden mismatch.\nactual:\n{}\nexpected:\n{}",
         serde_json::to_string_pretty(&actual).unwrap(),
         serde_json::to_string_pretty(&expected).unwrap()

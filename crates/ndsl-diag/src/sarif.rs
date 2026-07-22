@@ -170,7 +170,10 @@ mod tests {
             json.contains("\"ruleId\":\"NFD001\""),
             "missing ruleId: {json}"
         );
-        assert!(json.contains("\"level\":\"error\""), "missing level: {json}");
+        assert!(
+            json.contains("\"level\":\"error\""),
+            "missing level: {json}"
+        );
         assert!(
             json.contains("\"message\":{\"text\":\"undefined field\"}"),
             "missing message: {json}"

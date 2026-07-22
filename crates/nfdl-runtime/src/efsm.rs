@@ -122,7 +122,6 @@ impl FsmEngine {
     }
 
     /// Main feed: uses full parsed transitions, executes actions, returns events
-
     pub fn feed(
         &mut self,
         key: FlowKey,
@@ -143,11 +142,11 @@ impl FsmEngine {
 
         // Look in all machines
         for (machine_name, states) in &self.machines {
-            if current == "IDLE" {
-                if let Some(init) = self.initials.get(machine_name) {
-                    current = init.clone();
-                    new_state = current.clone();
-                }
+            if current == "IDLE"
+                && let Some(init) = self.initials.get(machine_name)
+            {
+                current = init.clone();
+                new_state = current.clone();
             }
             if let Some(transitions) = states.get(&current) {
                 for tr in transitions {
@@ -207,9 +206,7 @@ impl FsmEngine {
     }
 
     pub fn has_timer(&self, key: &FlowKey, name: &str) -> bool {
-        self.timers
-            .get(key)
-            .is_some_and(|m| m.contains_key(name))
+        self.timers.get(key).is_some_and(|m| m.contains_key(name))
     }
 
     /// Arm (or re-arm) a named timer that fires after `delay_ticks` on the timer clock.
@@ -252,7 +249,12 @@ impl FsmEngine {
         for (key, map) in &self.timers {
             for (name, armed) in map {
                 if armed.deadline <= now {
-                    due.push((armed.deadline, armed.insertion_id, key.clone(), name.clone()));
+                    due.push((
+                        armed.deadline,
+                        armed.insertion_id,
+                        key.clone(),
+                        name.clone(),
+                    ));
                 }
             }
         }

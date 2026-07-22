@@ -98,9 +98,7 @@ impl ActionIntent {
     pub fn is_control_plane(&self) -> bool {
         matches!(
             self.kind,
-            ActionKind::RequestObservation
-                | ActionKind::RequestTopology
-                | ActionKind::RunCheck
+            ActionKind::RequestObservation | ActionKind::RequestTopology | ActionKind::RunCheck
         )
     }
 }
@@ -229,9 +227,7 @@ impl LiveActionSink {
     fn record(&mut self, intent: ActionIntent, mode: RunMode, wm: EventTime) -> SinkOutcome {
         let (code, outcome) = match mode {
             RunMode::Offline => match intent.kind {
-                ActionKind::RequestObservation => {
-                    (Some("ADGL3001"), SinkOutcome::NoOpInReplay)
-                }
+                ActionKind::RequestObservation => (Some("ADGL3001"), SinkOutcome::NoOpInReplay),
                 _ => (None, SinkOutcome::Audited),
             },
             RunMode::Live => {
@@ -278,7 +274,11 @@ mod tests {
     #[test]
     fn offline_request_observation_audits_adgl3001_noop_in_replay() {
         let mut sink = OfflineAuditSink::new();
-        sink.emit(intent(ActionKind::RequestObservation), RunMode::Offline, wm(1));
+        sink.emit(
+            intent(ActionKind::RequestObservation),
+            RunMode::Offline,
+            wm(1),
+        );
 
         assert_eq!(sink.entries().len(), 1);
         assert_eq!(sink.entries()[0].code, Some("ADGL3001"));
@@ -304,11 +304,7 @@ mod tests {
 
         assert_eq!(sink.entries().len(), kinds.len());
         assert!(sink.entries().iter().all(|e| e.code.is_none()));
-        assert!(
-            sink.outcomes()
-                .iter()
-                .all(|o| *o == SinkOutcome::Audited)
-        );
+        assert!(sink.outcomes().iter().all(|o| *o == SinkOutcome::Audited));
     }
 
     #[test]
@@ -328,9 +324,7 @@ mod tests {
         assert_eq!(sink.entries().len(), 5);
         assert!(sink.entries().iter().all(|e| e.code.is_none()));
         assert!(
-            sink.outcomes()
-                .iter()
-                .all(|o| *o == SinkOutcome::Audited),
+            sink.outcomes().iter().all(|o| *o == SinkOutcome::Audited),
             "OfflineAuditSink must never report Applied/NotSupported — it has no controllers"
         );
         assert!(!sink.outcomes().contains(&SinkOutcome::Applied));
@@ -339,7 +333,11 @@ mod tests {
     #[test]
     fn live_stub_offline_request_observation_is_adgl3001() {
         let mut sink = LiveActionSink::new();
-        sink.emit(intent(ActionKind::RequestObservation), RunMode::Offline, wm(2));
+        sink.emit(
+            intent(ActionKind::RequestObservation),
+            RunMode::Offline,
+            wm(2),
+        );
 
         assert_eq!(sink.entries()[0].code, Some("ADGL3001"));
         assert_eq!(sink.outcomes(), &[SinkOutcome::NoOpInReplay]);

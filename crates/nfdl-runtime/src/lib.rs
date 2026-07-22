@@ -1,4 +1,6 @@
 #![forbid(unsafe_code)]
+// Lowering / runner surfaces carry large tuples and bytecode emitters by design.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 pub mod bytecode;
 pub mod context;
@@ -12,11 +14,13 @@ pub mod runner;
 pub mod session;
 pub mod vm;
 
-pub use bytecode::{BytecodeProgram, BytecodeVm, Instruction, Limits, StreamOutcome, VmContinuation};
+pub use bytecode::{
+    BytecodeProgram, BytecodeVm, Instruction, Limits, StreamOutcome, VmContinuation,
+};
 pub use context::ParserContext;
 pub use continuation::{
-    parse_stream_start, parse_stream_start_with_limits, resume, CompleteParse, StreamContinuation,
-    StreamParseStep,
+    CompleteParse, StreamContinuation, StreamParseStep, parse_stream_start,
+    parse_stream_start_with_limits, resume,
 };
 pub use efsm::{FiredTimer, FsmEngine};
 pub use error::RuntimeError;

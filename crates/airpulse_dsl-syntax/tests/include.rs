@@ -1,6 +1,6 @@
 //! ADGL multi-file `include` loader tests.
 
-use airpulse_dsl_syntax::{load_ruleset, parse_ruleset, RuleDecl};
+use airpulse_dsl_syntax::{RuleDecl, load_ruleset, parse_ruleset};
 use std::path::PathBuf;
 
 fn fixture(parts: &[&str]) -> PathBuf {

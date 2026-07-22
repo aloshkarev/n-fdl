@@ -7,9 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use airpulse_dsl_evaluator::{
-    CorrelateError, Engine, EngineDiagnostic, OfflineAuditSink, ProblemView, RunMode,
-    SarifOptions, Snapshot, StaticTopology, catalog_pii_field_names, fixtures,
-    redact_evidence_field_map, to_sarif_with_options,
+    CorrelateError, Engine, EngineDiagnostic, OfflineAuditSink, ProblemView, RunMode, SarifOptions,
+    Snapshot, StaticTopology, catalog_pii_field_names, fixtures, redact_evidence_field_map,
+    to_sarif_with_options,
 };
 use airpulse_dsl_ir::{PredOp, Predicate, ProgramImage, SlotIdx};
 use airpulse_dsl_store::{EventNode, EventProvenance, Limits, StoreDiagnostic};
@@ -381,7 +381,10 @@ fn assert_strict_privacy_holds(fields: &BTreeMap<String, String>, pii: &BTreeSet
         }
     }
 
-    let sarif = to_sarif_with_options(&snapshot_with_evidence(fields.clone()), SarifOptions::strict());
+    let sarif = to_sarif_with_options(
+        &snapshot_with_evidence(fields.clone()),
+        SarifOptions::strict(),
+    );
     for (name, clear) in fields {
         if pii.contains(name) {
             if clear != REDACTED {

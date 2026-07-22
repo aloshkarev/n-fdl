@@ -12,5 +12,5 @@ mod include;
 mod parser;
 
 pub use ast::*;
-pub use include::{load_ruleset, LoadedRuleset};
+pub use include::{LoadedRuleset, load_ruleset};
 pub use parser::{line_col, parse_expression, parse_ruleset};

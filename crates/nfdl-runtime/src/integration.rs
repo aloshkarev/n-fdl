@@ -24,20 +24,8 @@ pub fn eval_expr(expr: &Expr, vars: &HashMap<String, u64>) -> u64 {
                 BinOp::Add => l + r,
                 BinOp::Sub => l.saturating_sub(r),
                 BinOp::Mul => l * r,
-                BinOp::Div => {
-                    if r != 0 {
-                        l / r
-                    } else {
-                        0
-                    }
-                }
-                BinOp::Mod => {
-                    if r != 0 {
-                        l % r
-                    } else {
-                        0
-                    }
-                }
+                BinOp::Div => l.checked_div(r).unwrap_or(0),
+                BinOp::Mod => l.checked_rem(r).unwrap_or(0),
                 BinOp::Eq => {
                     if l == r {
                         1
@@ -133,7 +121,7 @@ pub fn eval_expr(expr: &Expr, vars: &HashMap<String, u64>) -> u64 {
         Expr::Call { name: _, args: _ } => 0, // bidir_tuple etc handled specially for keys
         Expr::Tuple(_) => 0, // tuples are structural (used in keys), not scalar values
         Expr::Field(_, _) => 0, // resolved at key computation via dotted names
-        Expr::Str(_) => 0, // string literals are not scalar values
+        Expr::Str(_) => 0,   // string literals are not scalar values
     }
 }
 

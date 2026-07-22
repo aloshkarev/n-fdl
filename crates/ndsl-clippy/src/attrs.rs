@@ -99,10 +99,7 @@ fn parse_id_list(raw: &str) -> Option<Vec<String>> {
         if id.is_empty() {
             continue;
         }
-        if !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return None;
         }
         ids.push(id.to_ascii_uppercase());

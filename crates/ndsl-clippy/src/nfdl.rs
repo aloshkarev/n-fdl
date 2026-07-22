@@ -78,10 +78,7 @@ fn check_naming_types(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
         out.push(LintDiagnostic::new(
             NFDL_NAMING_TYPE,
             LintLevel::Warn,
-            format!(
-                "protocol name `{}` should be CamelCase",
-                proto.name
-            ),
+            format!("protocol name `{}` should be CamelCase", proto.name),
             find_ident_span(ctx.source, &proto.name),
         ));
     }
@@ -635,8 +632,10 @@ protocol bad_proto {
             diags
         );
         assert!(
-            diags.iter().any(|d| d.diagnostic.id == NFDL_NAMING_TYPE
-                && d.diagnostic.message.contains("bad_msg")),
+            diags
+                .iter()
+                .any(|d| d.diagnostic.id == NFDL_NAMING_TYPE
+                    && d.diagnostic.message.contains("bad_msg")),
             "expected message naming lint, got: {:?}",
             diags
         );
@@ -705,20 +704,25 @@ protocol Good {
 "#;
         let diags = lint(src);
         assert!(
-            diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET
-                && d.diagnostic.message.contains("dead")),
+            diags.iter().any(
+                |d| d.diagnostic.id == NFDL_UNUSED_LET && d.diagnostic.message.contains("dead")
+            ),
             "expected unused let lint, got: {:?}",
             diags
         );
         assert!(
-            !diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET
-                && d.diagnostic.message.contains("`alive`")),
+            !diags
+                .iter()
+                .any(|d| d.diagnostic.id == NFDL_UNUSED_LET
+                    && d.diagnostic.message.contains("`alive`")),
             "alive let should not warn: {:?}",
             diags
         );
         assert!(
-            !diags.iter().any(|d| d.diagnostic.id == NFDL_UNUSED_LET
-                && d.diagnostic.message.contains("`used`")),
+            !diags
+                .iter()
+                .any(|d| d.diagnostic.id == NFDL_UNUSED_LET
+                    && d.diagnostic.message.contains("`used`")),
             "wire field must not be flagged as unused let: {:?}",
             diags
         );

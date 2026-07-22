@@ -486,7 +486,9 @@ impl BytecodeVm {
                     } else if stream {
                         let have = self.input.len().saturating_sub(self.input_pos);
                         let needed = 2usize.saturating_sub(have);
-                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed.max(1))));
+                        return Ok(StreamOutcome::NeedMoreBytes(
+                            self.snapshot(ip, needed.max(1)),
+                        ));
                     } else {
                         self.write_slot(*slot, 0);
                         ip += 1;
@@ -506,7 +508,9 @@ impl BytecodeVm {
                     } else if stream {
                         let have = self.input.len().saturating_sub(self.input_pos);
                         let needed = 3usize.saturating_sub(have);
-                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed.max(1))));
+                        return Ok(StreamOutcome::NeedMoreBytes(
+                            self.snapshot(ip, needed.max(1)),
+                        ));
                     } else {
                         self.write_slot(*slot, 0);
                         ip += 1;
@@ -526,7 +530,9 @@ impl BytecodeVm {
                     } else if stream {
                         let have = self.input.len().saturating_sub(self.input_pos);
                         let needed = 4usize.saturating_sub(have);
-                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed.max(1))));
+                        return Ok(StreamOutcome::NeedMoreBytes(
+                            self.snapshot(ip, needed.max(1)),
+                        ));
                     } else {
                         self.write_slot(*slot, 0);
                         ip += 1;
@@ -541,8 +547,7 @@ impl BytecodeVm {
                     } else {
                         0usize
                     };
-                    if stream && *len_slot != u16::MAX && self.input_pos + len > self.input.len()
-                    {
+                    if stream && *len_slot != u16::MAX && self.input_pos + len > self.input.len() {
                         let have = self.input.len().saturating_sub(self.input_pos);
                         let needed = len.saturating_sub(have).max(1);
                         return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed)));
@@ -784,11 +789,7 @@ mod tests {
             vm_all.run_stream(&program).unwrap(),
             StreamOutcome::Complete
         ));
-        let all_slots = [
-            vm_all.get_slot(0),
-            vm_all.get_slot(1),
-            vm_all.get_slot(2),
-        ];
+        let all_slots = [vm_all.get_slot(0), vm_all.get_slot(1), vm_all.get_slot(2)];
 
         // Feed one byte, then the rest.
         let mut vm = BytecodeVm::new(4);

@@ -70,7 +70,11 @@ protocol Multi {
     assert!(
         proto.messages.iter().any(|m| m.name == "Third"),
         "expected to keep parsing after errors; messages={:?}",
-        proto.messages.iter().map(|m| m.name.as_str()).collect::<Vec<_>>()
+        proto
+            .messages
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect::<Vec<_>>()
     );
     let third = proto.messages.iter().find(|m| m.name == "Third").unwrap();
     assert!(third.fields.iter().any(|f| f.name == "z"));

@@ -13,10 +13,10 @@ pub mod registry;
 pub mod verify;
 
 pub use abi::{
-    AbiType, BufView, PluginError, PluginFlags, PluginManifest, PluginStatus, PluginValue, Purity,
-    ABI_VERSION,
+    ABI_VERSION, AbiType, BufView, PluginError, PluginFlags, PluginManifest, PluginStatus,
+    PluginValue, Purity,
 };
-pub use dns_decompress::{dns_decompress, MAX_JUMPS};
+pub use dns_decompress::{MAX_JUMPS, dns_decompress};
 pub use registry::{InvokeFn, PluginRegistry, RegisteredPlugin};
 pub use verify::{verify_invoke_arity, verify_invoke_name};
 
@@ -46,8 +46,14 @@ mod tests {
                 &[PluginValue::Opaque, PluginValue::U64(0)],
             )
             .expect("invoke");
-        assert_eq!(out.field("name").and_then(|v| v.as_str()), Some("www.example.com"));
-        assert_eq!(out.field("wire_len").and_then(|v| v.as_u16()), Some(buf.len() as u16));
+        assert_eq!(
+            out.field("name").and_then(|v| v.as_str()),
+            Some("www.example.com")
+        );
+        assert_eq!(
+            out.field("wire_len").and_then(|v| v.as_u16()),
+            Some(buf.len() as u16)
+        );
     }
 
     #[test]
@@ -71,13 +77,12 @@ mod tests {
 
         let reg = PluginRegistry::with_builtins();
         let out = reg
-            .invoke(
-                "dns_decompress",
-                &buf,
-                &[PluginValue::U64(www_off as u64)],
-            )
+            .invoke("dns_decompress", &buf, &[PluginValue::U64(www_off as u64)])
             .expect("invoke");
-        assert_eq!(out.field("name").and_then(|v| v.as_str()), Some("www.example.com"));
+        assert_eq!(
+            out.field("name").and_then(|v| v.as_str()),
+            Some("www.example.com")
+        );
         // on-wire: len(3) + "www" + 2-byte pointer = 6
         assert_eq!(out.field("wire_len").and_then(|v| v.as_u16()), Some(6));
     }

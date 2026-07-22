@@ -148,7 +148,10 @@ mod tests {
     fn classify_line_comment_distinguishes_doc() {
         assert_eq!(classify_line_comment("// note"), TriviaKind::LineComment);
         assert_eq!(classify_line_comment("/// hello"), TriviaKind::DocComment);
-        assert_eq!(classify_line_comment("//// not doc"), TriviaKind::LineComment);
+        assert_eq!(
+            classify_line_comment("//// not doc"),
+            TriviaKind::LineComment
+        );
         assert_eq!(classify_line_comment("///"), TriviaKind::DocComment);
     }
 
@@ -161,9 +164,6 @@ mod tests {
             trivia(TriviaKind::Newline, 17, 18, "\n"),
             trivia(TriviaKind::DocComment, 18, 27, "/// world"),
         ];
-        assert_eq!(
-            docs_from_leading(&leading).as_deref(),
-            Some("hello\nworld")
-        );
+        assert_eq!(docs_from_leading(&leading).as_deref(), Some("hello\nworld"));
     }
 }

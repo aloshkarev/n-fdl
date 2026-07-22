@@ -55,9 +55,7 @@ fn ptb(id: u64, time_ms: i64, scope: ScopeId, target_key: Option<i64>) -> EventN
     )
 }
 
-fn offline(
-    topo: StaticTopology,
-) -> Engine<'static, StaticTopology, OfflineAuditSink> {
+fn offline(topo: StaticTopology) -> Engine<'static, StaticTopology, OfflineAuditSink> {
     let img = Box::leak(Box::new(fixtures::rule3_pmtud()));
     Engine::new(
         img,

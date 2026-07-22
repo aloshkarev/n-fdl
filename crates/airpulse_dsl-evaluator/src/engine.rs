@@ -1222,47 +1222,42 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     let problem_node_id = amb_node_id + 1;
                     let created = {
                         let mut part = self.store.partition_mut(scope);
-                        if part.ambiguities.contains_key(&(pair.clone(), target)) {
-                            false
-                        } else {
-                            let other_node =
-                                part.causes.get(&(other.clone(), target)).map(|n| n.id);
-                            part.ambiguities.insert(
-                                (pair.clone(), target),
-                                AmbiguityNode {
+                        let other_node = part.causes.get(&(other.clone(), target)).map(|n| n.id);
+                        match part.ambiguities.entry((pair.clone(), target)) {
+                            std::collections::hash_map::Entry::Occupied(_) => false,
+                            std::collections::hash_map::Entry::Vacant(slot) => {
+                                slot.insert(AmbiguityNode {
                                     id: NodeId::new(amb_node_id),
                                     causes: pair.clone(),
                                     target,
                                     state: AmbiguityState::Active,
-                                },
-                            );
-                            let (sarif_id, severity) = resolve_problem("AmbiguousDiagnosis")
-                                .map(|schema| {
-                                    (
-                                        schema.default_sarif_id.clone(),
-                                        schema.severity.unwrap_or(Severity::Medium),
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    (SarifId::new("ap_ambiguous"), Severity::Medium)
                                 });
-                            let mut evidence = vec![snapshot.node];
-                            if let Some(node) = other_node
-                                && !evidence.contains(&node)
-                            {
-                                evidence.push(node);
+                                let (sarif_id, severity) = resolve_problem("AmbiguousDiagnosis")
+                                    .map(|schema| {
+                                        (
+                                            schema.default_sarif_id.clone(),
+                                            schema.severity.unwrap_or(Severity::Medium),
+                                        )
+                                    })
+                                    .unwrap_or_else(|| {
+                                        (SarifId::new("ap_ambiguous"), Severity::Medium)
+                                    });
+                                let mut evidence = vec![snapshot.node];
+                                if let Some(node) = other_node.filter(|n| !evidence.contains(n)) {
+                                    evidence.push(node);
+                                }
+                                part.push_problem(ProblemNode {
+                                    id: NodeId::new(problem_node_id),
+                                    kind: ProblemKind::new("AmbiguousDiagnosis"),
+                                    target,
+                                    time: wm,
+                                    severity,
+                                    evidence,
+                                    sarif_id,
+                                    superseded: false,
+                                });
+                                true
                             }
-                            part.push_problem(ProblemNode {
-                                id: NodeId::new(problem_node_id),
-                                kind: ProblemKind::new("AmbiguousDiagnosis"),
-                                target,
-                                time: wm,
-                                severity,
-                                evidence,
-                                sarif_id,
-                                superseded: false,
-                            });
-                            true
                         }
                     };
                     if created {
@@ -1511,7 +1506,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     }
 }
 
-impl<'img, T: TopologyProvider> Engine<'img, T, OfflineAuditSink> {
+impl<T: TopologyProvider> Engine<'_, T, OfflineAuditSink> {
     /// Full deterministic snapshot including the sorted audit log
     /// (ADR-012 merge ordering; see [`Snapshot`] docs).
     #[must_use]

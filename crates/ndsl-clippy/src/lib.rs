@@ -21,17 +21,17 @@ use std::str::FromStr;
 pub use adgl::{
     ADGLS_ABSENCE_IDIOM, ADGLS_EMPTY_HAVING, ADGLS_FLOAT_LITERAL, ADGLS_UNUSED_CORRELATE,
 };
+use airpulse_dsl_syntax::ast::Ruleset;
+use airpulse_dsl_syntax::parse_ruleset;
 pub use builtin::NFDL_EMPTY_FILE;
 pub use ndsl_diag::Span;
 pub use nfdl::{
     NFDL_NAMING_FIELD, NFDL_NAMING_TYPE, NFDL_REDUNDANT_VALIDATE, NFDL_UNUSED_LET,
     NFDL_UNUSED_MESSAGE,
 };
-pub use render::{render, RenderFormat};
-use airpulse_dsl_syntax::ast::Ruleset;
-use airpulse_dsl_syntax::parse_ruleset;
-use nfdl_syntax::ast::Protocol;
 use nfdl_syntax::Parser;
+use nfdl_syntax::ast::Protocol;
+pub use render::{RenderFormat, render};
 
 /// Stable lint identifier (e.g. `NFDL0001`, `ADGLS0042`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -321,7 +321,9 @@ impl LintStore {
         // The N-FDL parser accepts EOF as an empty protocol; skip AST attach for
         // blank sources so engine-smoke empty-file stays the only finding.
         let nfdl_ast = match lang {
-            LintLang::Nfdl if !source.trim().is_empty() => Parser::new(source).parse_protocol().ok(),
+            LintLang::Nfdl if !source.trim().is_empty() => {
+                Parser::new(source).parse_protocol().ok()
+            }
             _ => None,
         };
         let adgl_ast = match lang {
@@ -519,10 +521,7 @@ mod tests {
         store.register_builtin();
         // N-FDL pack (5) + ADGL pack (4) + engine-smoke NFDL0900.
         assert_eq!(store.len(), 10);
-        assert_eq!(
-            store.effective_level(NFDL_EMPTY_FILE),
-            LintLevel::Warn
-        );
+        assert_eq!(store.effective_level(NFDL_EMPTY_FILE), LintLevel::Warn);
         assert_eq!(store.effective_level(NFDL_NAMING_TYPE), LintLevel::Warn);
         assert_eq!(
             store.effective_level(ADGLS_UNUSED_CORRELATE),
@@ -577,9 +576,7 @@ protocol bad_proto {{
         let src = naming_src_with_directive("// #[allow(NFDL0001)]");
         let diags = store.lint_source(Path::new("t.nfdl"), &src, LintLang::Nfdl);
         assert!(
-            diags
-                .iter()
-                .all(|d| d.diagnostic.id != NFDL_NAMING_TYPE),
+            diags.iter().all(|d| d.diagnostic.id != NFDL_NAMING_TYPE),
             "allow(NFDL0001) should suppress naming findings, got: {diags:?}"
         );
     }
@@ -594,7 +591,10 @@ protocol bad_proto {{
             .iter()
             .filter(|d| d.diagnostic.id == NFDL_NAMING_TYPE)
             .collect();
-        assert!(!naming.is_empty(), "expected NFDL0001 findings, got: {diags:?}");
+        assert!(
+            !naming.is_empty(),
+            "expected NFDL0001 findings, got: {diags:?}"
+        );
         assert!(
             naming.iter().all(|d| d.diagnostic.level == LintLevel::Deny),
             "deny(NFDL0001) should elevate to deny, got: {naming:?}"
@@ -630,10 +630,7 @@ protocol bad_proto {{
 
     #[test]
     fn lint_store_walk_skips_clean_nonempty_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "ndsl-clippy-walk-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ndsl-clippy-walk-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("ok.nfdl");
@@ -652,10 +649,7 @@ protocol bad_proto {{
 
     #[test]
     fn lint_store_walk_directory_finds_empty_adgl() {
-        let dir = std::env::temp_dir().join(format!(
-            "ndsl-clippy-dir-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ndsl-clippy-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let empty = dir.join("empty.adgl");
@@ -682,10 +676,8 @@ protocol bad_proto {{
 
     #[test]
     fn lint_store_rejects_unsupported_extension() {
-        let path = std::env::temp_dir().join(format!(
-            "ndsl-clippy-notes-{}.txt",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ndsl-clippy-notes-{}.txt", std::process::id()));
         fs::write(&path, "hello").unwrap();
 
         let mut store = LintStore::new();
@@ -701,10 +693,7 @@ protocol bad_proto {{
     fn lint_store_walk_skips_broken_symlink_nested() {
         use std::os::unix::fs::symlink;
 
-        let dir = std::env::temp_dir().join(format!(
-            "ndsl-clippy-symlink-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ndsl-clippy-symlink-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let empty = dir.join("empty.adgl");
@@ -724,10 +713,8 @@ protocol bad_proto {{
 
     #[test]
     fn lint_store_hard_errors_on_missing_explicit_path() {
-        let path = std::env::temp_dir().join(format!(
-            "ndsl-clippy-missing-{}.nfdl",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ndsl-clippy-missing-{}.nfdl", std::process::id()));
         let _ = fs::remove_file(&path);
 
         let mut store = LintStore::new();

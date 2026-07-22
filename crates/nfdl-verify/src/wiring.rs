@@ -215,7 +215,9 @@ protocol P {\n\
         data: bytes[length - 8];\n\
     }\n\
 }\n";
-        let field_start = src.find("data: bytes[length - 8];").expect("field in source");
+        let field_start = src
+            .find("data: bytes[length - 8];")
+            .expect("field in source");
         let field_end = field_start + "data: bytes[length - 8];".len();
 
         let proto = Parser::new(src).parse_protocol().expect("parse");

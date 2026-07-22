@@ -1,6 +1,6 @@
+use nfdl_runtime::FsmEngine;
 use nfdl_runtime::event_bus::Event;
 use nfdl_runtime::session::FlowKey;
-use nfdl_runtime::FsmEngine;
 use nfdl_syntax::ast::{Action, State, StateMachine, Transition};
 use std::collections::HashMap;
 

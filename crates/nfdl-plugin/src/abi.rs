@@ -96,9 +96,7 @@ impl PluginValue {
     /// Look up a named field in a [`PluginValue::Record`].
     pub fn field(&self, name: &str) -> Option<&PluginValue> {
         match self {
-            PluginValue::Record(fields) => {
-                fields.iter().find(|(n, _)| n == name).map(|(_, v)| v)
-            }
+            PluginValue::Record(fields) => fields.iter().find(|(n, _)| n == name).map(|(_, v)| v),
             _ => None,
         }
     }

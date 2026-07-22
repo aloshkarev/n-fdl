@@ -125,8 +125,7 @@ fn expand_file_from_include(
     let parent = canon.parent().unwrap_or_else(|| Path::new("."));
     for inc in &includes {
         let child_path = parent.join(&inc.path);
-        let child =
-            expand_file_from_include(&child_path, &inc.span, stack, files, expanded_once)?;
+        let child = expand_file_from_include(&child_path, &inc.span, stack, files, expanded_once)?;
         imported_rules_text.push_str(&child.imported_rules_text);
         if child.emit_own_rules {
             imported_rules_text.push_str(&rules_text_from_body(&child.body)?);

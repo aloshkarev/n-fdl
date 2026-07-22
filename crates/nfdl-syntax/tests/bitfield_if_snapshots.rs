@@ -161,6 +161,8 @@ protocol Bad {
   message M { x: u8 if ; }
 }
 "#;
-    let err = Parser::new(src).parse_protocol().expect_err("if without expr");
+    let err = Parser::new(src)
+        .parse_protocol()
+        .expect_err("if without expr");
     insta::assert_debug_snapshot!(err);
 }

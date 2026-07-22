@@ -46,7 +46,7 @@ impl Reassembler {
             // Drain OOO
             while let Some((&next, seg)) = self.ooo.range(self.next_seq..).next() {
                 if next == self.next_seq {
-                    self.contiguous.extend_from_slice(&seg);
+                    self.contiguous.extend_from_slice(seg);
                     self.next_seq = self.next_seq.wrapping_add(seg.len() as u32);
                     self.ooo.remove(&next);
                 } else {

@@ -48,7 +48,15 @@ impl IntervalAnalyzer {
             facts: HashMap::new(),
         }
     }
+}
 
+impl Default for IntervalAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IntervalAnalyzer {
     pub fn add_fact(&mut self, var: &str, interval: Interval) {
         self.facts.insert(var.to_string(), interval);
     }

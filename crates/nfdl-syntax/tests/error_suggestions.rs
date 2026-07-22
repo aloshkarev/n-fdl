@@ -65,7 +65,9 @@ protocol Bad {
         "missing-`;` recovery must keep following fields: {names:?}"
     );
     assert!(
-        rendered.iter().any(|m| m.contains("1..=64") || m.contains("bitfield")),
+        rendered
+            .iter()
+            .any(|m| m.contains("1..=64") || m.contains("bitfield")),
         "later bad field should still contribute a diagnostic: {rendered:?}"
     );
 }

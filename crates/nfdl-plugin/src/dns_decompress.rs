@@ -3,7 +3,7 @@
 //! Guards: bounds checks, `MAX_JUMPS`, and a visited-set against compression loops.
 
 use crate::abi::{
-    AbiType, BufView, PluginError, PluginFlags, PluginManifest, PluginValue, Purity, ABI_VERSION,
+    ABI_VERSION, AbiType, BufView, PluginError, PluginFlags, PluginManifest, PluginValue, Purity,
 };
 
 /// Anti-DoS cap on compression-pointer hops (spec §7).
@@ -58,9 +58,10 @@ pub fn dns_decompress(root: BufView<'_>) -> Result<PluginValue, PluginError> {
             // Root label — terminate.
             if wire_len.is_none() {
                 let len = (cur + 1).saturating_sub(start);
-                wire_len = Some(u16::try_from(len).map_err(|_| {
-                    PluginError::malformed(format!("wire_len {len} exceeds u16"))
-                })?);
+                wire_len =
+                    Some(u16::try_from(len).map_err(|_| {
+                        PluginError::malformed(format!("wire_len {len} exceeds u16"))
+                    })?);
             }
             break;
         }
@@ -68,9 +69,7 @@ pub fn dns_decompress(root: BufView<'_>) -> Result<PluginValue, PluginError> {
         if (b & 0xC0) == 0xC0 {
             // Compression pointer (2 bytes).
             if cur + 1 >= data.len() {
-                return Err(PluginError::malformed(
-                    "truncated DNS compression pointer",
-                ));
+                return Err(PluginError::malformed("truncated DNS compression pointer"));
             }
             jumps += 1;
             if jumps > MAX_JUMPS {
@@ -87,9 +86,10 @@ pub fn dns_decompress(root: BufView<'_>) -> Result<PluginValue, PluginError> {
             visited.push(target);
             if wire_len.is_none() {
                 let len = (cur + 2).saturating_sub(start);
-                wire_len = Some(u16::try_from(len).map_err(|_| {
-                    PluginError::malformed(format!("wire_len {len} exceeds u16"))
-                })?);
+                wire_len =
+                    Some(u16::try_from(len).map_err(|_| {
+                        PluginError::malformed(format!("wire_len {len} exceeds u16"))
+                    })?);
             }
             cur = target;
             continue;
@@ -134,8 +134,7 @@ pub fn invoke(root: &[u8], args: &[PluginValue]) -> Result<PluginValue, PluginEr
             ));
         }
     };
-    let offset = usize::try_from(offset).map_err(|_| {
-        PluginError::malformed(format!("root_offset {offset} does not fit usize"))
-    })?;
+    let offset = usize::try_from(offset)
+        .map_err(|_| PluginError::malformed(format!("root_offset {offset} does not fit usize")))?;
     dns_decompress(BufView::new(root, offset))
 }
