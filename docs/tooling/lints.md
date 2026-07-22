@@ -73,7 +73,7 @@ fails (floats are rejected by the parser / units ABI).
 | `ADGLS0001` | warn | Correlate binding is never referenced outside its own `topo`/`time` — **`present()` / `absent()` and `infer`/`emit`/`action` evidence lists count as uses** (no false positive when the binding appears only there) |
 | `ADGLS0100` | warn | Float literal in `.adgl` source (outside comments/strings). Units ABI is i64 — prefer per-mille / centi / ms integer thresholds |
 | `ADGLS0200` | warn | `having: count >= 1` is redundant with the omitted default (empty / no-op having). **Does not** re-emit verify `ADGL0504` (`N = 0`) / `ADGL0505` (`N > 32`) |
-| `ADGLS0300` | warn | Absence-named signal (heuristic: `unanswered`, `missing*`, `*absent`, `without*`, `incomplete*`, `no_response`, `absence*`) in rule/predicate/field paths **without** any `present(...)` / `absent(...)` correlate check. Suggests explicit absence-as-code correlate idioms; **no IR counterfactual**. Does not fire when the rule already uses `present`/`absent` |
+| `ADGLS0300` | warn | Absence-named signal (heuristic: substring `contains` match on `unanswered`, `missing`, `absent`, `without`, `incomplete`, `no_response`/`noresponse`, `absence`) in rule/predicate/field paths on a rule that has **≥1 correlate** and never uses `present(...)` / `absent(...)`. Suggests considering those correlate idioms for peer-response absence; **no IR counterfactual**. Skips zero-correlate rules (counter-gap / metric / completeness / pure Cause→Problem verdicts). Expert counter-gap / metric thresholds (`absence_ms`, `*_without_*` counters) may intentionally omit `present`/`absent` — use `allow(ADGLS0300)` when appropriate |
 
 ## Suppress / deny attributes (Wave 0)
 

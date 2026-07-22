@@ -288,10 +288,12 @@ fn check_empty_having(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
 }
 
 /// Suggest `present`/`absent` correlate idioms when absence-named signals appear
-/// without any explicit correlate presence check (`docs/ABSENCE_SEMANTICS.md`).
+/// on a rule that has correlates but never checks correlate presence
+/// (`docs/ABSENCE_SEMANTICS.md`).
 ///
-/// Heuristic only — no IR/counterfactual sugar. Does not fire when the rule
-/// already uses `present(...)` or `absent(...)`.
+/// Heuristic only — no IR/counterfactual sugar. Skips rules with zero correlates
+/// (counter-gap / metric / completeness / pure Cause→Problem verdicts) and rules
+/// that already use `present(...)` or `absent(...)`.
 fn check_absence_idiom(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
     let Some(rs) = ruleset(ctx) else {
         return Vec::new();
@@ -300,6 +302,9 @@ fn check_absence_idiom(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
     for rule in &rs.rules {
         match rule {
             RuleDecl::Evidence(ev) => {
+                if ev.correlates.is_empty() {
+                    continue;
+                }
                 if rule_uses_present_or_absent_evidence(ev) {
                     continue;
                 }
@@ -308,6 +313,9 @@ fn check_absence_idiom(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
                 }
             }
             RuleDecl::Decision(dec) => {
+                if dec.correlates.is_empty() {
+                    continue;
+                }
                 if rule_uses_present_or_absent_decision(dec) {
                     continue;
                 }
@@ -325,9 +333,9 @@ fn absence_idiom_diagnostic(name: &str, span: Span) -> LintDiagnostic {
         ADGLS_ABSENCE_IDIOM,
         LintLevel::Warn,
         format!(
-            "absence-named signal `{name}` without `present`/`absent` correlate idiom; \
-             prefer explicit `present(binding)` / `absent(binding)` (absence-as-code) \
-             over silent all-positives-failed counters — see ABSENCE_SEMANTICS"
+            "absence-named signal `{name}` without `present`/`absent` correlate check; \
+             consider `present(binding)` / `absent(binding)` for peer-response absence \
+             — see ABSENCE_SEMANTICS"
         ),
         span,
     )
@@ -1013,11 +1021,15 @@ ruleset "t" {
         let src = minimal_ruleset(
             r#"
     evidence dhcp_missing_offer {
-        scope: Global
-        anchor h: event(dhcp.summary) {
-            h.discover_without_offer >= 1
+        scope: Session
+        anchor h: event(dhcp.discover) {
+            h.xid > 0
         }
-        infer Cause(DhcpMissingOfferSignal) { target: h.target, weight: +65, evidence: [h] }
+        correlate offer: event(dhcp.offer) {
+            topo: same_session(h.target, offer.target)
+            time: offer.time in [h.time, h.time + 5s]
+        }
+        infer Cause(DhcpMissingOfferSignal) { target: h.target, weight: +65, evidence: [h, offer] }
     }
 "#,
         );
@@ -1027,6 +1039,7 @@ ruleset "t" {
                 d.diagnostic.id == ADGLS_ABSENCE_IDIOM
                     && d.diagnostic.message.contains("present(binding)")
                     && d.diagnostic.message.contains("absent(binding)")
+                    && !d.diagnostic.message.contains("silent all-positives-failed")
             }),
             "expected ADGLS0300 with present/absent suggestion, got: {:?}",
             diags
@@ -1037,7 +1050,34 @@ ruleset "t" {
     }
 
     #[test]
-    fn absence_named_with_present_absent_does_not_warn() {
+    fn absence_named_zero_correlates_does_not_warn() {
+        let src = minimal_ruleset(
+            r#"
+    evidence dhcp_missing_offer {
+        scope: Global
+        anchor h: event(dhcp.summary) {
+            h.discover_without_offer >= 1
+        }
+        infer Cause(DhcpMissingOfferSignal) { target: h.target, weight: +65, evidence: [h] }
+    }
+"#,
+        );
+        let diags = lint(&src);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
+            "zero-correlate counter-gap must not fire ADGLS0300, got: {:?}",
+            diags
+                .iter()
+                .filter(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM)
+                .map(|d| &d.diagnostic.message)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn absence_named_with_absent_does_not_warn() {
         let src = minimal_ruleset(
             r#"
     evidence dhcp_missing_offer {
@@ -1060,7 +1100,40 @@ ruleset "t" {
             !diags
                 .iter()
                 .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
-            "present/absent idiom must suppress ADGLS0300, got: {:?}",
+            "absent(...) idiom must suppress ADGLS0300, got: {:?}",
+            diags
+                .iter()
+                .filter(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM)
+                .map(|d| &d.diagnostic.message)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn absence_named_with_present_does_not_warn() {
+        let src = minimal_ruleset(
+            r#"
+    evidence dhcp_missing_offer {
+        scope: Session
+        anchor h: event(dhcp.discover) {
+            h.xid > 0
+        }
+        correlate offer: event(dhcp.offer) {
+            topo: same_session(h.target, offer.target)
+            time: offer.time in [h.time, h.time + 5s]
+        }
+        if present(offer) {
+            infer Cause(DhcpOfferPresent) { target: h.target, weight: +20, evidence: [h, offer] }
+        }
+    }
+"#,
+        );
+        let diags = lint(&src);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
+            "present(...) idiom must suppress ADGLS0300, got: {:?}",
             diags
                 .iter()
                 .filter(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM)
