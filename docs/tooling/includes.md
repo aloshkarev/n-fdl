@@ -37,6 +37,9 @@ These IDs live in the loader band (`ADGL40xx`), not `ADGL02xx` (TypeError).
 
 - `parse_ruleset(&str)` — unchanged, single-file; rejects `include`.
 - `load_ruleset(path) -> LoadedRuleset` then `LoadedRuleset::parse()`.
+- `airpulse_dsl_verify::verify_path(path)` — load (with includes) then AOT verify/lower.
+- `ndsl-cli parse|check` — ADGL paths use `load_ruleset`.
+- `ndsl-cli verify` — semantic verify (`verify_path`); **not** the same as `check` (parse+lint).
 
 ## Follow-up
 

@@ -264,6 +264,7 @@ name = "ndsl-cli"
 version = "0.1.0"
 dependencies = [
  "airpulse_dsl-syntax",
+ "airpulse_dsl-verify",
  "ndsl-clippy",
  "ndsl-fmt",
  "nfdl-runtime",
