@@ -86,6 +86,7 @@ mod tests {
             messages: (0..n_messages)
                 .map(|i| Message {
                     name: format!("M{i}"),
+                    doc: None,
                     fields: vec![],
                     lets: vec![],
                     loops: vec![],

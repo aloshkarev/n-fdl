@@ -10,10 +10,48 @@ pub use ndsl_diag::Span;
 /// Kind of non-semantic source text preserved for formatting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriviaKind {
+    /// Ordinary `//` line comment (not a doc-comment).
     LineComment,
+    /// Outer doc-comment line starting with `///` (but not `////`).
+    DocComment,
     BlockComment,
     Whitespace,
     Newline,
+}
+
+/// Classify a line-comment lexeme (`//…` through end of line, no trailing newline).
+///
+/// `/// text` → [`TriviaKind::DocComment`]; `////…` and plain `//…` → [`TriviaKind::LineComment`].
+pub fn classify_line_comment(text: &str) -> TriviaKind {
+    if text.starts_with("///") && !text.starts_with("////") {
+        TriviaKind::DocComment
+    } else {
+        TriviaKind::LineComment
+    }
+}
+
+/// Join leading `///` doc-comments into a single doc string, or `None` if absent.
+///
+/// Strips the `///` prefix and one optional following space per line; multiple
+/// consecutive doc lines are joined with `\n`. Non-doc trivia is ignored.
+pub fn docs_from_leading(trivia: &[Trivia]) -> Option<String> {
+    let mut lines = Vec::new();
+    for t in trivia {
+        if t.kind != TriviaKind::DocComment {
+            continue;
+        }
+        lines.push(strip_doc_prefix(&t.text));
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn strip_doc_prefix(text: &str) -> String {
+    let rest = text.strip_prefix("///").unwrap_or(text);
+    rest.strip_prefix(' ').unwrap_or(rest).to_owned()
 }
 
 /// A single trivia fragment with its source span and exact text.
@@ -104,5 +142,28 @@ mod tests {
         let span = Span::new(3, 7);
         let item = trivia(TriviaKind::Whitespace, span.start, span.end, "    ");
         assert_eq!(item.span, span);
+    }
+
+    #[test]
+    fn classify_line_comment_distinguishes_doc() {
+        assert_eq!(classify_line_comment("// note"), TriviaKind::LineComment);
+        assert_eq!(classify_line_comment("/// hello"), TriviaKind::DocComment);
+        assert_eq!(classify_line_comment("//// not doc"), TriviaKind::LineComment);
+        assert_eq!(classify_line_comment("///"), TriviaKind::DocComment);
+    }
+
+    #[test]
+    fn docs_from_leading_joins_doc_lines() {
+        assert_eq!(docs_from_leading(&[]), None);
+        let leading = vec![
+            trivia(TriviaKind::LineComment, 0, 7, "// skip"),
+            trivia(TriviaKind::DocComment, 8, 17, "/// hello"),
+            trivia(TriviaKind::Newline, 17, 18, "\n"),
+            trivia(TriviaKind::DocComment, 18, 27, "/// world"),
+        ];
+        assert_eq!(
+            docs_from_leading(&leading).as_deref(),
+            Some("hello\nworld")
+        );
     }
 }

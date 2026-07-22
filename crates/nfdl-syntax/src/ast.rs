@@ -138,6 +138,8 @@ pub struct Loop {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub name: String,
+    /// Outer doc-comment (`///`) immediately preceding this message, if any.
+    pub doc: Option<String>,
     pub fields: Vec<Field>,
     pub lets: Vec<Let>,
     pub loops: Vec<Loop>,
@@ -206,6 +208,8 @@ pub struct StateMachine {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Protocol {
     pub name: String,
+    /// Outer doc-comment (`///`) immediately preceding this protocol, if any.
+    pub doc: Option<String>,
     pub endian: String, // "big" | "little"
     pub mode: String,   // "datagram" | "stream"
     pub eof: String,    // EOF source for bytes[EOF]: "" | "on_fin" | "on_close" | "by_plugin(...)"
@@ -218,6 +222,7 @@ impl Default for Protocol {
     fn default() -> Self {
         Self {
             name: String::new(),
+            doc: None,
             endian: "big".to_string(),
             mode: "datagram".to_string(),
             eof: String::new(),

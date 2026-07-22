@@ -100,7 +100,7 @@ fn collect_comments(src: &str) -> Vec<String> {
     loop {
         let tok = lexer.next_token();
         for t in lexer.trivia_before_next_token() {
-            if matches!(t.kind, TriviaKind::LineComment | TriviaKind::BlockComment) {
+            if matches!(t.kind, TriviaKind::LineComment | TriviaKind::DocComment | TriviaKind::BlockComment) {
                 comments.push(t.text);
             }
         }

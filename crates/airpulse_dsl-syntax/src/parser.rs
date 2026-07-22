@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use airpulse_dsl_types::{ActionKind, ScopeType, Severity};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
-use ndsl_trivia::{Trivia, TriviaKind};
+use ndsl_trivia::{Trivia, TriviaKind, classify_line_comment, docs_from_leading};
 use winnow::Parser;
 use winnow::error::InputError;
 use winnow::token::take_while;
@@ -59,6 +59,7 @@ enum TokenKind<'a> {
 struct Token<'a> {
     kind: TokenKind<'a>,
     span: Span,
+    leading: Vec<Trivia>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,7 +209,7 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
         ));
     }
 
-    let mut lx = Lexer::new(src);
+        let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     let mut depth: usize = 0;
     while !lx.is_eof() {
@@ -216,7 +217,9 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
         if lx.is_eof() {
             break;
         }
-        let tok = lx.next_token()?;
+        let leading = lx.trivia_before_next_token();
+        let mut tok = lx.next_token()?;
+        tok.leading = leading;
         match tok.kind {
             TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
                 depth += 1;
@@ -239,6 +242,7 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
     out.push(Token {
         kind: TokenKind::Eof,
         span: Span::new(src.len(), src.len()),
+        leading: Vec::new(),
     });
     Ok(out)
 }
@@ -305,10 +309,11 @@ impl<'a> Lexer<'a> {
                     let _ = self.bump_char();
                 }
                 let end = self.pos;
+                let text = self.src[start..end].to_owned();
                 self.pending_trivia.push(Trivia {
-                    kind: TriviaKind::LineComment,
+                    kind: classify_line_comment(&text),
                     span: Span::new(start, end),
-                    text: self.src[start..end].to_owned(),
+                    text,
                 });
             } else if self.rest().starts_with("/*") {
                 consumed = true;
@@ -351,6 +356,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::AndAnd,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("||") {
@@ -358,6 +364,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::OrOr,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("==") {
@@ -365,6 +372,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::EqEq,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("!=") {
@@ -372,6 +380,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Ne,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("<=") {
@@ -379,6 +388,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Le,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with(">=") {
@@ -386,6 +396,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Ge,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
 
@@ -395,6 +406,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LBrace,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('}') => {
@@ -402,6 +414,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RBrace,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('(') => {
@@ -409,6 +422,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LParen,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some(')') => {
@@ -416,6 +430,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RParen,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('[') => {
@@ -423,6 +438,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LBracket,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some(']') => {
@@ -430,6 +446,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RBracket,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some(':') => {
@@ -437,6 +454,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Colon,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some(',') => {
@@ -444,6 +462,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Comma,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('.') => {
@@ -451,6 +470,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Dot,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('=') => {
@@ -458,6 +478,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Eq,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('+') => {
@@ -465,6 +486,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Plus,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('-') => {
@@ -472,6 +494,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Minus,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('*') => {
@@ -479,6 +502,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Star,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('/') => {
@@ -486,6 +510,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Slash,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('%') => {
@@ -493,6 +518,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Percent,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('!') => {
@@ -500,6 +526,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Bang,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('<') => {
@@ -507,6 +534,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Lt,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('>') => {
@@ -514,6 +542,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Gt,
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 })
             }
             Some('"') => self.lex_string(start),
@@ -531,6 +560,7 @@ impl<'a> Lexer<'a> {
             None => Ok(Token {
                 kind: TokenKind::Eof,
                 span: Span::new(self.pos, self.pos),
+                leading: Vec::new(),
             }),
         }
     }
@@ -575,6 +605,7 @@ impl<'a> Lexer<'a> {
         Ok(Token {
             kind,
             span: Span::new(start, self.pos),
+                leading: Vec::new(),
         })
     }
 
@@ -647,6 +678,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Duration(value),
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if unit_rest.starts_with('s') && !starts_ident_continue(unit_rest, 1) {
@@ -654,6 +686,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Duration(value.saturating_mul(1_000)),
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if unit_rest.starts_with("min") {
@@ -661,6 +694,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Duration(value.saturating_mul(60_000)),
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if unit_rest.starts_with('m') || unit_rest.starts_with("mi") {
@@ -679,6 +713,7 @@ impl<'a> Lexer<'a> {
         Ok(Token {
             kind: TokenKind::Int(value),
             span: Span::new(start, self.pos),
+                leading: Vec::new(),
         })
     }
 
@@ -690,6 +725,7 @@ impl<'a> Lexer<'a> {
                 return Ok(Token {
                     kind: TokenKind::String(out),
                     span: Span::new(start, self.pos),
+                leading: Vec::new(),
                 });
             }
             if ch == '\\' {
@@ -984,6 +1020,7 @@ impl<'a> ParserState<'a> {
 
     fn parse_ruleset(&mut self) -> Result<Ruleset<'a>, ParseErr> {
         // EBNF: Ruleset ::= "ruleset" StringLit "{" RulesetHeader { Rule } "}" ;
+        let doc = docs_from_leading(&self.peek().leading);
         let start = self.consume_kw("ruleset")?.start;
         let name = self.parse_string_lit()?;
         let _ = self.consume_punct(TokenKind::LBrace, "{")?;
@@ -1019,6 +1056,7 @@ impl<'a> ParserState<'a> {
         }
         Ok(Ruleset {
             name,
+            doc,
             header,
             rules,
             span: Span::new(start, end),
@@ -1112,6 +1150,7 @@ impl<'a> ParserState<'a> {
 
     fn parse_evidence_rule(&mut self) -> Result<EvidenceRule<'a>, ParseErr> {
         // EBNF: EvidenceRule ::= ...
+        let doc = docs_from_leading(&self.peek().leading);
         let start = self.consume_kw("evidence")?.start;
         let name = self.parse_ident_non_kw()?;
         let _ = self.consume_punct(TokenKind::LBrace, "{")?;
@@ -1135,6 +1174,7 @@ impl<'a> ParserState<'a> {
         let end = self.consume_punct(TokenKind::RBrace, "}")?.end;
         Ok(EvidenceRule {
             name,
+            doc,
             scope,
             anchor,
             correlates,
@@ -1146,6 +1186,7 @@ impl<'a> ParserState<'a> {
 
     fn parse_decision_rule(&mut self) -> Result<DecisionRule<'a>, ParseErr> {
         // EBNF: DecisionRule ::= ...
+        let doc = docs_from_leading(&self.peek().leading);
         let start = self.consume_kw("decision")?.start;
         let name = self.parse_ident_non_kw()?;
         let _ = self.consume_punct(TokenKind::LBrace, "{")?;
@@ -1169,6 +1210,7 @@ impl<'a> ParserState<'a> {
         let end = self.consume_punct(TokenKind::RBrace, "}")?.end;
         Ok(DecisionRule {
             name,
+            doc,
             scope,
             anchor,
             correlates,
@@ -2246,6 +2288,53 @@ mod tests {
         assert_eq!(trivia[0].kind, TriviaKind::BlockComment);
         assert_eq!(trivia[0].text, "/* block */");
         assert_eq!(trivia[0].span, TriviaSpan::new(0, "/* block */".len()));
+    }
+
+    #[test]
+    fn doc_comment_preserved_as_trivia() {
+        let src = "/// hello\nruleset";
+        let mut lexer = Lexer::new(src);
+        lexer.skip_ws_and_comments().unwrap();
+        let tok = lexer.next_token().unwrap();
+        assert!(matches!(tok.kind, TokenKind::Kw("ruleset")));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::DocComment);
+        assert_eq!(trivia[0].text, "/// hello");
+    }
+
+    #[test]
+    fn doc_comment_attaches_to_ruleset_and_rules() {
+        let src = r#"
+/// hello
+ruleset "Demo" {
+  version = "1.0"
+  /// evidence note
+  evidence seed {
+    scope: Session
+    anchor a: event(tcp.retransmission_burst)
+    infer Cause(SeedCause) { target: a.target, weight: +50, evidence: [a] }
+  }
+  /// decision note
+  decision verdict {
+    scope: Session
+    anchor c: Cause(SeedCause) { c.confidence >= 50 }
+    emit Problem(SeedProblem) { severity: High, evidence: [c] }
+  }
+}
+"#;
+        let ast = parse_ruleset(src).expect("demo ruleset");
+        assert_eq!(ast.doc.as_deref(), Some("hello"));
+        assert_eq!(ast.rules.len(), 2);
+        match &ast.rules[0] {
+            RuleDecl::Evidence(e) => assert_eq!(e.doc.as_deref(), Some("evidence note")),
+            other => panic!("expected evidence, got {other:?}"),
+        }
+        match &ast.rules[1] {
+            RuleDecl::Decision(d) => assert_eq!(d.doc.as_deref(), Some("decision note")),
+            other => panic!("expected decision, got {other:?}"),
+        }
     }
 
     #[test]

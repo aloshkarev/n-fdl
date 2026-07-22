@@ -7,6 +7,7 @@
 use crate::ast::*;
 use crate::lexer::{Lexer, Token};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
+use ndsl_trivia::{Trivia, docs_from_leading};
 
 /// Stable diagnostic code for N-FDL syntax / recovery errors.
 const NFD_SYNTAX: &str = "NFD0100";
@@ -24,6 +25,8 @@ pub struct Parser<'a> {
     current_span: Span,
     /// Span of the token immediately before [`Self::current`].
     prev_span: Span,
+    /// Leading trivia collected immediately before [`Self::current`].
+    current_leading: Vec<Trivia>,
     /// When true, statement-level errors are recorded and parsing continues after resync.
     recover: bool,
     diags: DiagBuffer,
@@ -33,12 +36,14 @@ impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
         let mut lexer = Lexer::new(input);
         let current = lexer.next_token();
+        let current_leading = lexer.trivia_before_next_token();
         let current_span = lexer.last_span();
         Self {
             lexer,
             current,
             current_span,
             prev_span: Span::unknown(),
+            current_leading,
             recover: false,
             diags: DiagBuffer::new(),
         }
@@ -47,6 +52,7 @@ impl<'a> Parser<'a> {
     fn advance(&mut self) {
         self.prev_span = self.current_span;
         self.current = self.lexer.next_token();
+        self.current_leading = self.lexer.trivia_before_next_token();
         self.current_span = self.lexer.last_span();
     }
 
@@ -144,6 +150,7 @@ impl<'a> Parser<'a> {
                 self.record_error(&e);
                 Protocol {
                     name: String::new(),
+                    doc: None,
                     endian: "big".to_string(),
                     mode: "datagram".to_string(),
                     eof: String::new(),
@@ -1234,6 +1241,7 @@ impl<'a> Parser<'a> {
     pub fn parse_protocol(&mut self) -> Result<Protocol, ParseError> {
         let mut proto = Protocol {
             name: String::new(),
+            doc: None,
             endian: "big".to_string(),
             mode: "datagram".to_string(),
             eof: String::new(),
@@ -1245,6 +1253,7 @@ impl<'a> Parser<'a> {
         while self.current != Token::Eof {
             match &self.current {
                 Token::Protocol => {
+                    proto.doc = docs_from_leading(&self.current_leading);
                     self.advance();
                     if let Token::Ident(n) = &self.current {
                         proto.name = n.clone();
@@ -1378,6 +1387,7 @@ impl<'a> Parser<'a> {
                 }
 
                 Token::Message => {
+                    let doc = docs_from_leading(&self.current_leading);
                     self.advance();
                     let name = if let Token::Ident(n) = &self.current {
                         let n = n.clone();
@@ -1400,6 +1410,7 @@ impl<'a> Parser<'a> {
 
                     proto.messages.push(Message {
                         name,
+                        doc,
                         fields,
                         lets,
                         loops,
@@ -1559,5 +1570,24 @@ mod tests {
         // ... (keep previous assertions)
         let sm = &proto.state_machines[0];
         assert_eq!(sm.name, "AuthDialog");
+    }
+
+    #[test]
+    fn doc_comment_attaches_to_protocol_and_message() {
+        let src = r#"
+/// hello
+protocol Demo {
+  endian = big;
+  /// request PDU
+  message Request {
+    op: u8;
+  }
+}
+"#;
+        let mut p = Parser::new(src);
+        let proto = p.parse_protocol().expect("demo");
+        assert_eq!(proto.doc.as_deref(), Some("hello"));
+        assert_eq!(proto.messages.len(), 1);
+        assert_eq!(proto.messages[0].doc.as_deref(), Some("request PDU"));
     }
 }

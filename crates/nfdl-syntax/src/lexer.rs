@@ -1,6 +1,6 @@
 use std::str::Chars;
 
-use ndsl_trivia::{Span, Trivia, TriviaKind};
+use ndsl_trivia::{Span, Trivia, TriviaKind, classify_line_comment};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -109,10 +109,11 @@ impl<'a> Lexer<'a> {
                         self.bump();
                     }
                     let end = self.pos;
+                    let text = self.input[start..end].to_owned();
                     self.pending_trivia.push(Trivia {
-                        kind: TriviaKind::LineComment,
+                        kind: classify_line_comment(&text),
                         span: Span::new(start, end),
-                        text: self.input[start..end].to_owned(),
+                        text,
                     });
                 }
                 Some('/') if self.peek_nth(1) == Some('*') => {
@@ -348,5 +349,18 @@ mod tests {
         assert_eq!(trivia[0].kind, TriviaKind::BlockComment);
         assert_eq!(trivia[0].text, "/* block */");
         assert_eq!(trivia[0].span, Span::new(0, "/* block */".len()));
+    }
+
+    #[test]
+    fn doc_comment_preserved_as_trivia() {
+        let src = "/// hello\nprotocol";
+        let mut lexer = Lexer::new(src);
+        assert!(matches!(lexer.next_token(), Token::Protocol));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::DocComment);
+        assert_eq!(trivia[0].text, "/// hello");
+        assert_eq!(trivia[0].span, Span::new(0, "/// hello".len()));
     }
 }
