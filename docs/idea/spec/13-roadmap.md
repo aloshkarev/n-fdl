@@ -134,6 +134,20 @@ phases — [plans/implementation-phases.md](../plans/implementation-phases.md).
 - Performance: ingest throughput ≥ legacy flat-TOML на corpus; latency ≤
   `max_forward_window + W` (08 §7).
 
+## Appendix — Tooling / runtime hardening (shipped on `feature/nfdl-adgl-tooling-runtime`)
+
+ADGL milestones **M0–M6 above are unchanged**. This appendix notes ADGL-side tooling and runtime hardening shipped in the same effort as N-FDL tooling waves (mirror: [N-FDL 13-roadmap](../../spec/13-roadmap.md) appendix).
+
+**Shipped (ADGL-focused):**
+
+- `airpulse_dsl-syntax` recovery + parse suggestions; `include` loader
+- `ndsl-clippy` ADGLS rules (incl. ADGLS0300 absence idiom on correlate)
+- Docs/`///`; SARIF / diagnostics alignment
+- Late-event policy, privacy strict-redaction path, ActionSink / topology plumbing
+- Shared dual-track tree-sitter IDE track (not on verify/evaluator path)
+
+**Policy:** [ADR-013 dual-track tree-sitter](../../adr/ADR-013-dual-track-treesitter.md). Gates: [PRODUCTION_CHECKLIST.md](../../../PRODUCTION_CHECKLIST.md).
+
 ## Внешние ссылки (Exa-verified)
 
 - SARIF 2.1.0 — https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html
