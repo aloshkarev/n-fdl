@@ -11,9 +11,15 @@ Matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 3. `cargo test --workspace`
 4. `./scripts/check_grammar_conformance.sh` (Rust ↔ tree-sitter IDE track; not used by verify/runtime)
 
-## Planned local wrapper
+## Local wrapper
 
-`scripts/release-gate.sh` (Task 39) will run the four CI gates above in one command. Until it lands, run them manually or rely on CI.
+[`scripts/release-gate.sh`](scripts/release-gate.sh) runs the four CI gates above in one fail-fast command:
+
+```bash
+./scripts/release-gate.sh
+./scripts/release-gate.sh --help
+./scripts/release-gate.sh --dry-run   # print step banners only
+```
 
 ## Tooling docs (spot-check with gates)
 

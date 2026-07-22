@@ -77,6 +77,7 @@ state_machine AuthDialog {
 
 - Рабочее пространство Cargo: `nfdl-syntax`, `nfdl-runtime`, `nfdl-verify`, `nfdl-fuzz`, `nfdl-cli`.
 - Сквозной тест: `fsm_integration`.
+- Локальный release gate (fmt + clippy + test + grammar): `./scripts/release-gate.sh`.
 - При необходимости: `export PATH="$HOME/.cargo/bin:$PATH"`.
 
 Актуальные релизные гейты и ссылки на tooling — в [`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md).
