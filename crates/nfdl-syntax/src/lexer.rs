@@ -1,5 +1,7 @@
 use std::str::Chars;
 
+use ndsl_trivia::{Span, Trivia, TriviaKind, classify_line_comment};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Protocol,
@@ -54,24 +56,41 @@ pub enum Token {
 }
 
 pub struct Lexer<'a> {
+    input: &'a str,
     chars: Chars<'a>,
+    /// Byte offset into `input`.
     pos: usize,
+    /// Trivia collected while skipping ahead to the most recent token.
+    pending_trivia: Vec<Trivia>,
+    /// Byte span of the most recently returned token.
+    last_token_span: Span,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
+            input,
             chars: input.chars(),
             pos: 0,
+            pending_trivia: Vec::new(),
+            last_token_span: Span::unknown(),
         }
     }
 
+    /// Take trivia collected immediately before the most recent [`Self::next_token`].
+    pub fn trivia_before_next_token(&mut self) -> Vec<Trivia> {
+        std::mem::take(&mut self.pending_trivia)
+    }
+
+    /// Byte span of the token most recently produced by [`Self::next_token`].
+    pub fn last_span(&self) -> Span {
+        self.last_token_span
+    }
+
     fn bump(&mut self) -> Option<char> {
-        let c = self.chars.next();
-        if c.is_some() {
-            self.pos += 1;
-        }
-        c
+        let c = self.chars.next()?;
+        self.pos += c.len_utf8();
+        Some(c)
     }
 
     fn peek(&self) -> Option<char> {
@@ -85,11 +104,20 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 Some('/') if self.peek_nth(1) == Some('/') => {
+                    let start = self.pos;
                     while self.peek() != Some('\n') && self.peek().is_some() {
                         self.bump();
                     }
+                    let end = self.pos;
+                    let text = self.input[start..end].to_owned();
+                    self.pending_trivia.push(Trivia {
+                        kind: classify_line_comment(&text),
+                        span: Span::new(start, end),
+                        text,
+                    });
                 }
                 Some('/') if self.peek_nth(1) == Some('*') => {
+                    let start = self.pos;
                     self.bump();
                     self.bump();
                     while !(self.peek() == Some('*') && self.peek_nth(1) == Some('/'))
@@ -99,6 +127,12 @@ impl<'a> Lexer<'a> {
                     }
                     self.bump();
                     self.bump();
+                    let end = self.pos;
+                    self.pending_trivia.push(Trivia {
+                        kind: TriviaKind::BlockComment,
+                        span: Span::new(start, end),
+                        text: self.input[start..end].to_owned(),
+                    });
                 }
                 _ => break,
             }
@@ -110,8 +144,10 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn next_token(&mut self) -> Token {
+        self.pending_trivia.clear();
         self.skip_whitespace_and_comments();
-        match self.bump() {
+        let start = self.pos;
+        let tok = match self.bump() {
             Some('{') => Token::LBrace,
             Some('}') => Token::RBrace,
             Some('[') => Token::LBracket,
@@ -271,16 +307,60 @@ impl<'a> Lexer<'a> {
 
             Some(c) => Token::Error(format!("unexpected {}", c)),
             None => Token::Eof,
-        }
+        };
+        self.last_token_span = Span::new(start, self.pos);
+        tok
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndsl_trivia::{Span, TriviaKind};
+
     #[test]
     fn lex_basic() {
         let mut l = Lexer::new("protocol ARP { message X { a: u8; } }");
         assert!(matches!(l.next_token(), Token::Protocol));
+        assert_eq!(l.last_span(), Span::new(0, "protocol".len()));
+    }
+
+    #[test]
+    fn line_comment_preserved_as_trivia() {
+        let src = "// leading note\nprotocol";
+        let mut lexer = Lexer::new(src);
+        assert!(matches!(lexer.next_token(), Token::Protocol));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::LineComment);
+        assert_eq!(trivia[0].text, "// leading note");
+        assert_eq!(trivia[0].span, Span::new(0, "// leading note".len()));
+    }
+
+    #[test]
+    fn block_comment_preserved_as_trivia() {
+        let src = "/* block */protocol";
+        let mut lexer = Lexer::new(src);
+        assert!(matches!(lexer.next_token(), Token::Protocol));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::BlockComment);
+        assert_eq!(trivia[0].text, "/* block */");
+        assert_eq!(trivia[0].span, Span::new(0, "/* block */".len()));
+    }
+
+    #[test]
+    fn doc_comment_preserved_as_trivia() {
+        let src = "/// hello\nprotocol";
+        let mut lexer = Lexer::new(src);
+        assert!(matches!(lexer.next_token(), Token::Protocol));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::DocComment);
+        assert_eq!(trivia[0].text, "/// hello");
+        assert_eq!(trivia[0].span, Span::new(0, "/// hello".len()));
     }
 }

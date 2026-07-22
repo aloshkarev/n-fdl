@@ -14,10 +14,13 @@
 //! - [`TopologyProvider`] (`07` §6) + [`StaticTopology`] test oracle with
 //!   cycle-bounded `upstream_of`;
 //! - [`ActionSink`] (`07` §7) + [`OfflineAuditSink`] (`ADGL3001`
-//!   ActionNoOpInReplay);
+//!   ActionNoOpInReplay) + stub [`LiveActionSink`] (`SinkOutcome::NotSupported`
+//!   for live control-plane; no host eBPF in this crate);
 //! - [`fixtures`] — hand-coded `ProgramImage`s for examples 01 and 07;
 //! - [`Snapshot`] — deterministic result extraction (ADR-012) for golden
-//!   assertions and later SARIF emission (T-08).
+//!   assertions and later SARIF emission (T-08);
+//! - [`redact_evidence_field_map`] / [`catalog_pii_field_names`] — strict-
+//!   privacy evidence scrubbing (`10` §11, ADR-009).
 //!
 //! # Spec notes / Phase 1 interpretations
 //!
@@ -57,9 +60,12 @@ pub use binding::{Binding, Bound, CauseSnapshot, ProblemSnapshot};
 pub use diag::EngineDiagnostic;
 pub use engine::Engine;
 pub use error::CorrelateError;
+pub use evidence::{catalog_pii_field_names, redact_evidence_field_map};
 pub use extract::{CauseView, ProblemView, Snapshot};
 pub use interner::{ScopeInterner, scope_key_i64};
 pub use predicate::{PredCtx, eval_predicate};
 pub use sarif::{SarifOptions, to_sarif, to_sarif_with_options};
-pub use sink::{ActionIntent, ActionSink, AuditEntry, OfflineAuditSink, RunMode};
+pub use sink::{
+    ActionIntent, ActionSink, AuditEntry, LiveActionSink, OfflineAuditSink, RunMode, SinkOutcome,
+};
 pub use topology::{StaticTopology, TopoFunc, TopologyDiagnostic, TopologyProvider};

@@ -1,0 +1,8 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+assertion_line: 100
+expression: err
+---
+Syntax(
+    "StreamRemControlFlow: __rem forbidden in conditional field (layout-affecting)",
+)

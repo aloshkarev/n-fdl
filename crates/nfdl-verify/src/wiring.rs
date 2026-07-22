@@ -10,7 +10,7 @@
 #![forbid(unsafe_code)]
 
 use crate::bounds::{Interval, IntervalAnalyzer};
-use nfdl_diag::{DiagBuffer, Diagnostic, Span};
+use nfdl_diag::{DiagBuffer, Diagnostic};
 use nfdl_syntax::ast::{Expr, Field, Message, NfdlType, Protocol, UnaryOp};
 
 /// Verify a parsed protocol. Returns a `DiagBuffer` of warnings/notes (no fatal
@@ -74,7 +74,7 @@ fn check_field_slice(field: &Field, analyzer: &IntervalAnalyzer, buf: &mut DiagB
                     "`bytes[...]` length `{}` may be negative (interval [{},{}]); add a `validate` guard",
                     expr_to_string(len), len_int.lo, len_int.hi
                 ),
-                Span::unknown(),
+                field.span,
             ));
         } else if len_int.hi == i64::MAX / 2 {
             buf.push(Diagnostic::note(
@@ -83,7 +83,7 @@ fn check_field_slice(field: &Field, analyzer: &IntervalAnalyzer, buf: &mut DiagB
                     "`bytes[...]` length `{}` is not statically bounded; relies on runtime `validate`/`__rem`",
                     expr_to_string(len)
                 ),
-                Span::unknown(),
+                field.span,
             ));
         }
     }
@@ -93,6 +93,7 @@ fn expr_to_string(expr: &Expr) -> String {
     match expr {
         Expr::Ident(s) => s.clone(),
         Expr::Int(v) => v.to_string(),
+        Expr::Str(s) => format!("\"{s}\""),
         Expr::Binary { left, op, right } => {
             format!(
                 "{} {} {}",
@@ -199,6 +200,44 @@ protocol P {
         assert!(
             !buf.has_errors(),
             "bounds analysis is advisory (no hard errors)"
+        );
+    }
+
+    #[test]
+    fn nfdv01_bytes_diagnostic_carries_real_span() {
+        // Field `data: bytes[length - 8];` must surface a non-unknown span so
+        // diagnostics can point at the source rather than 1:1 placeholders.
+        let src = "\
+protocol P {\n\
+    meta { endian = big; mode = datagram; }\n\
+    message M {\n\
+        length: u16;\n\
+        data: bytes[length - 8];\n\
+    }\n\
+}\n";
+        let field_start = src
+            .find("data: bytes[length - 8];")
+            .expect("field in source");
+        let field_end = field_start + "data: bytes[length - 8];".len();
+
+        let proto = Parser::new(src).parse_protocol().expect("parse");
+        let buf = verify_protocol(&proto);
+        let diag = buf
+            .iter()
+            .find(|d| d.code == "NFDV01")
+            .expect("expected NFDV01");
+        assert!(
+            diag.span.start != 0 || diag.span.end != 0,
+            "NFDV01 span must not be Span::unknown(), got {:?}",
+            diag.span
+        );
+        assert_eq!(
+            diag.span.start, field_start,
+            "NFDV01 should start at the `data` field"
+        );
+        assert_eq!(
+            diag.span.end, field_end,
+            "NFDV01 should end at the field semicolon"
         );
     }
 

@@ -2,7 +2,7 @@
 //! assigned by ADR-011; degrade + diagnostic, never a panic — `07` §9).
 
 use airpulse_dsl_store::StoreDiagnostic;
-use airpulse_dsl_types::{MetricPath, RuleId, ScopeId};
+use airpulse_dsl_types::{EventId, EventTime, EventType, MetricPath, RuleId, ScopeId};
 
 use crate::error::CorrelateError;
 
@@ -80,10 +80,37 @@ pub enum EngineDiagnostic {
         /// The missing suspended rule id.
         rule: RuleId,
     },
+    /// `ADGL3002 LateEvidence` — offline late event arrived after a matching
+    /// correlate had already resolved absent (`08` §4 / ADR-004). Accepted
+    /// into the ring for audit fidelity; infer is not re-applied.
+    LateEvidence {
+        /// Partition where the late evidence arrived.
+        scope: ScopeId,
+        /// Rule whose absent correlate the late event would have matched.
+        rule: RuleId,
+        /// Late event id.
+        event: EventId,
+        /// Late event type (correlate source).
+        event_type: EventType,
+        /// Watermark at ingest.
+        wm: EventTime,
+    },
+    /// `ADGL3003 LateEventDropped` — live late event dropped to the side-output
+    /// (`08` §4 / ADR-004).
+    LateEventDropped {
+        /// Partition of the dropped event.
+        scope: ScopeId,
+        /// Dropped event id.
+        event: EventId,
+        /// Event time.
+        time: EventTime,
+        /// Watermark that the event was late relative to.
+        wm: EventTime,
+    },
 }
 
 impl EngineDiagnostic {
-    /// Stable diagnostic code where ADR-011 assigns one.
+    /// Stable diagnostic code where ADR-011 / `11-error-diagnostics` assigns one.
     #[must_use]
     pub const fn code(&self) -> Option<&'static str> {
         match self {
@@ -92,6 +119,8 @@ impl EngineDiagnostic {
             EngineDiagnostic::UnsupportedTargetTail { .. } => Some("ADGL3008"),
             EngineDiagnostic::CauseCapacity { .. } => Some("ADGL3102"),
             EngineDiagnostic::RuleFiringsExceeded { .. } => Some("ADGL3103"),
+            EngineDiagnostic::LateEvidence { .. } => Some("ADGL3002"),
+            EngineDiagnostic::LateEventDropped { .. } => Some("ADGL3003"),
             EngineDiagnostic::UnresolvedTarget { .. }
             | EngineDiagnostic::RuntimeCheckWindow { .. }
             | EngineDiagnostic::MissingAnchor { .. }

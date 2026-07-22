@@ -1,0 +1,13 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+expression: match_arm_loop_body_field_view(src)
+---
+[
+    (
+        "payload",
+        U8,
+        Some(
+            "Binary { op: Eq, left: Ident(\"kind\"), right: Int(1) }",
+        ),
+    ),
+]

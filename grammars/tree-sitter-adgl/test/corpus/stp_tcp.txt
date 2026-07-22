@@ -1,0 +1,145 @@
+================================================================================
+STP TCP burst
+================================================================================
+
+// Rule 9 — STP topology change + retrans burst -> transient L2 disruption.
+// correlate window is purely backward [rtx.time - 2s, rtx.time] => no future
+// window => no WaitQueue suspension (08-stream-watermarking §3.1); the rule
+// executes immediately on anchor match.
+ruleset "airpulse.l2_diagnostics" {
+    version = "1.0"
+    requires = ["l3-deep", "topology"]
+
+    evidence stp_tcp_burst {
+        scope: Session
+        anchor rtx: event(tcp.retransmission_burst)
+        correlate stp: event(stp.topology_change) {
+            topo: same_vlan(rtx.vlan, stp.vlan)
+            time: stp.time in [rtx.time - 2s, rtx.time]
+        }
+        if present(stp) {
+            infer Cause(TransientL2Disruption) { target: rtx.target, weight: +80, evidence: [stp, rtx] }
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (line_comment)
+  (line_comment)
+  (line_comment)
+  (ruleset_decl
+    (string)
+    (ruleset_header
+      (version_decl
+        (string))
+      (header_decl
+        (requires_decl
+          (string)
+          (string))))
+    (rule
+      (evidence_rule
+        (identifier)
+        (scope_type)
+        (anchor_block
+          (identifier)
+          (kind_ident
+            (identifier)
+            (identifier)))
+        (correlate_block
+          (identifier)
+          (correlate_source
+            (kind_ident
+              (identifier)
+              (identifier)))
+          (topo_predicate
+            (identifier)
+            (expr_list
+              (expr
+                (logic_or
+                  (logic_and
+                    (equality
+                      (additive
+                        (multiplicative
+                          (unary
+                            (postfix
+                              (identifier)
+                              (identifier)))))))))
+              (expr
+                (logic_or
+                  (logic_and
+                    (equality
+                      (additive
+                        (multiplicative
+                          (unary
+                            (postfix
+                              (identifier)
+                              (identifier)))))))))))
+          (time_window
+            (expr
+              (logic_or
+                (logic_and
+                  (equality
+                    (additive
+                      (multiplicative
+                        (unary
+                          (postfix
+                            (identifier)
+                            (identifier)))))))))
+            (expr
+              (logic_or
+                (logic_and
+                  (equality
+                    (additive
+                      (multiplicative
+                        (unary
+                          (postfix
+                            (identifier)
+                            (identifier))))
+                      (multiplicative
+                        (unary
+                          (postfix
+                            (duration)))))))))
+            (expr
+              (logic_or
+                (logic_and
+                  (equality
+                    (additive
+                      (multiplicative
+                        (unary
+                          (postfix
+                            (identifier)
+                            (identifier)))))))))))
+        (if_else_block
+          (expr
+            (logic_or
+              (logic_and
+                (equality
+                  (additive
+                    (multiplicative
+                      (unary
+                        (postfix
+                          (present_expr
+                            (identifier))))))))))
+          (infer_stmt
+            (identifier)
+            (infer_field
+              (expr
+                (logic_or
+                  (logic_and
+                    (equality
+                      (additive
+                        (multiplicative
+                          (unary
+                            (postfix
+                              (identifier)
+                              (identifier))))))))))
+            (infer_field
+              (signed_integer
+                (integer)))
+            (infer_field
+              (ref_list
+                (identifier)
+                (identifier)))))))))

@@ -1,4 +1,3 @@
-pub struct ParserContext {
-    pub depth: usize,
-    pub loop_count: usize,
-}
+//! Parser depth counters — re-exported from [`nfdl_vm`] for API compatibility.
+
+pub use nfdl_vm::ParserContext;

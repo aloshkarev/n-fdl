@@ -511,12 +511,13 @@ fn phase02_name_and_typecheck(
                         );
                     }
                     for field in &infer.fields {
-                        if let Some((weight, span)) = field.weight_value()
-                            && (weight < i64::from(i8::MIN)
+                        if let Some((weight, span)) = field.weight_value() {
+                            if weight < i64::from(i8::MIN)
                                 || weight > i64::from(i8::MAX)
-                                || !(-100..=100).contains(&weight))
-                        {
-                            err(diags, "ADGL0205", "weight must be within [-100, 100]", span);
+                                || !(-100..=100).contains(&weight)
+                            {
+                                err(diags, "ADGL0205", "weight must be within [-100, 100]", span);
+                            }
                         }
                     }
                 }
@@ -1885,10 +1886,10 @@ fn infer_expr_type(
             None
         }
         ExprKind::Index { base, index } => {
-            if let Some(base_ty) = infer_expr_type(base, env, _state, diags)
-                && is_int_list_type(base_ty)
-            {
-                reject_intlist_predicate_use(expr.span, diags);
+            if let Some(base_ty) = infer_expr_type(base, env, _state, diags) {
+                if is_int_list_type(base_ty) {
+                    reject_intlist_predicate_use(expr.span, diags);
+                }
             }
             infer_expr_type(index, env, _state, diags);
             None
@@ -2117,10 +2118,10 @@ fn contains_present_absent(expr: &Expr<'_>) -> bool {
 }
 
 fn is_binding_time_probe(expr: &Expr<'_>, binding: &str) -> bool {
-    if let ExprKind::Field { base, field } = &expr.kind
-        && let ExprKind::Ident(id) = &base.kind
-    {
-        return id.name == binding && field.name == "time";
+    if let ExprKind::Field { base, field } = &expr.kind {
+        if let ExprKind::Ident(id) = &base.kind {
+            return id.name == binding && field.name == "time";
+        }
     }
     false
 }
@@ -2162,11 +2163,10 @@ fn ruleset_max_forward_window_ms(ruleset: &Ruleset<'_>) -> i64 {
 fn as_anchor_offset(anchor_binding: &str, expr: &Expr<'_>) -> Option<i64> {
     match &expr.kind {
         ExprKind::Field { base, field } => {
-            if let ExprKind::Ident(id) = &base.kind
-                && id.name == anchor_binding
-                && field.name == "time"
-            {
-                return Some(0);
+            if let ExprKind::Ident(id) = &base.kind {
+                if id.name == anchor_binding && field.name == "time" {
+                    return Some(0);
+                }
             }
             None
         }

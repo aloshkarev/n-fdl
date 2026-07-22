@@ -1,0 +1,13 @@
+include "left.adgl"
+include "right.adgl"
+
+ruleset "entry" {
+  version = "1.0"
+  evidence entry_ev {
+    scope: AccessPoint
+    anchor a: event(test.entry) {
+      a.w == 1
+    }
+    infer Cause(EntrySignal) { target: a.target, weight: +10, evidence: [a] }
+  }
+}

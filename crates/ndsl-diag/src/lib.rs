@@ -1,12 +1,16 @@
 //! Shared structured diagnostics for the ndsl DSLs (N-FDL and ADGL);
 //! see spec `11-error-diagnostics.md`.
 //!
-//! M0: a minimal `Diagnostic` value type with severity, stable code, message, and
+//! Minimal `Diagnostic` value type with severity, stable code, message, and
 //! a byte-span (`start..end`) into the source. A `DiagBuffer` collects diagnostics
-//! and supports rustc-style rendering (`<file>:<line>:<col>: <severity>: <code> <msg>`).
-//! SARIF 2.1.0 export is deferred to v2 (see `docs/spec/13-roadmap.md`).
+//! and supports rustc-style rendering (`<file>:<line>:<col>: <severity>: <code> <msg>`)
+//! plus compact SARIF 2.1.0 export ([`to_sarif`]).
 
 #![forbid(unsafe_code)]
+
+mod sarif;
+
+pub use sarif::{DEFAULT_TOOL_NAME, SarifOptions, to_sarif, to_sarif_with_options};
 
 use std::fmt;
 
@@ -128,9 +132,23 @@ impl DiagBuffer {
         }
         out
     }
+
+    /// Emit a minimal SARIF 2.1.0 JSON document for the buffered diagnostics.
+    ///
+    /// See [`to_sarif`].
+    #[must_use]
+    pub fn to_sarif(&self, src: &str, uri: &str) -> String {
+        crate::to_sarif(&self.diags, src, uri)
+    }
+
+    /// Emit SARIF JSON with explicit tool options.
+    #[must_use]
+    pub fn to_sarif_with_options(&self, src: &str, uri: &str, options: SarifOptions<'_>) -> String {
+        crate::to_sarif_with_options(&self.diags, src, uri, options)
+    }
 }
 
-fn line_col(src: &str, byte_off: usize) -> (usize, usize) {
+pub(crate) fn line_col(src: &str, byte_off: usize) -> (usize, usize) {
     let off = byte_off.min(src.len());
     let mut line = 1usize;
     let mut col = 1usize;

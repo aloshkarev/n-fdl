@@ -1,4 +1,6 @@
+use nfdl_bytecode::BytecodeError;
 use nfdl_syntax::ParseError;
+use nfdl_vm::VmError;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeError {
@@ -13,6 +15,23 @@ pub enum RuntimeError {
 impl From<ParseError> for RuntimeError {
     fn from(e: ParseError) -> Self {
         RuntimeError::Parse(format!("{:?}", e))
+    }
+}
+
+impl From<BytecodeError> for RuntimeError {
+    fn from(e: BytecodeError) -> Self {
+        match e {
+            BytecodeError::Constraint(s) => RuntimeError::Constraint(s),
+            BytecodeError::LimitExceeded(s) => RuntimeError::LimitExceeded(s),
+        }
+    }
+}
+
+impl From<VmError> for RuntimeError {
+    fn from(e: VmError) -> Self {
+        match e {
+            VmError::LimitExceeded(s) => RuntimeError::LimitExceeded(s),
+        }
     }
 }
 

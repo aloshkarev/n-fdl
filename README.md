@@ -11,7 +11,7 @@
 - **Ограничения ресурсов**: лимиты числа инструкций, глубины рекурсии `MessageRef`, размера контекста.
 - **Примеры**: полная поддержка `radius.nfdl` (циклы, ссылки на `Attribute`, автомат состояний) и других протоколов из `docs/examples/`.
 
-Подробный контрольный список и план развития — в `PRODUCTION_CHECKLIST.md`.
+Контрольный список релизных гейтов — в [`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md). План развития — [`docs/spec/13-roadmap.md`](docs/spec/13-roadmap.md). Tooling: [`docs/tooling/lints.md`](docs/tooling/lints.md), [`docs/tooling/includes.md`](docs/tooling/includes.md).
 
 ## Быстрый старт
 
@@ -77,8 +77,9 @@ state_machine AuthDialog {
 
 - Рабочее пространство Cargo: `nfdl-syntax`, `nfdl-runtime`, `nfdl-verify`, `nfdl-fuzz`, `nfdl-cli`.
 - Сквозной тест: `fsm_integration`.
+- Локальный release gate (fmt + clippy + test + grammar): `./scripts/release-gate.sh`.
 - При необходимости: `export PATH="$HOME/.cargo/bin:$PATH"`.
 
-Актуальный статус — в `PRODUCTION_CHECKLIST.md`.
+Актуальные релизные гейты и ссылки на tooling — в [`PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md).
 
 **Готово к исследовательскому использованию и поэтапной подготовке к промышленной эксплуатации.**

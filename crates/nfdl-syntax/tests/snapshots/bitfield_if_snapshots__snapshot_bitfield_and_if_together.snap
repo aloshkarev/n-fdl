@@ -1,0 +1,21 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+assertion_line: 61
+expression: field_view(src)
+---
+[
+    (
+        "present",
+        Bitfield {
+            bits: 1,
+        },
+        None,
+    ),
+    (
+        "payload",
+        U16,
+        Some(
+            "Binary { op: Eq, left: Ident(\"present\"), right: Int(1) }",
+        ),
+    ),
+]

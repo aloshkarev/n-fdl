@@ -1,0 +1,7 @@
+---
+source: crates/nfdl-syntax/tests/bitfield_if_snapshots.rs
+expression: err
+---
+Syntax(
+    "bad primary: expected expression, found ;; tip: start with ident, literal, or `(`",
+)

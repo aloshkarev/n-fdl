@@ -354,6 +354,32 @@ mod tests {
     }
 
     #[test]
+    fn unknown_must_not_collapse_to_false_adr010() {
+        // ADR-010 / C10: topology absence is T3::Unknown, never False.
+        let topo = StaticTopology::new(16);
+        let a = ScopeId::vlan(1);
+        let b = ScopeId::vlan(2);
+        for ans in [
+            topo.same_session(a, b),
+            topo.same_client(a, b),
+            topo.same_port(a, b),
+            topo.same_ap(a, b),
+            topo.same_vlan(a, b),
+            topo.upstream_of(a, b),
+        ] {
+            assert_eq!(ans, T3::Unknown);
+            assert!(
+                ans.is_unknown() && !ans.is_false() && !ans.is_true(),
+                "Unknown must not collapse to False/True: {ans:?}"
+            );
+        }
+        assert!(
+            topo.diagnostics().is_empty(),
+            "Unknown is not a cycle/hop diagnostic"
+        );
+    }
+
+    #[test]
     fn upstream_of_transitive_and_bounded() {
         let (r1, r2, r3) = (
             ScopeId::port(1, 1),

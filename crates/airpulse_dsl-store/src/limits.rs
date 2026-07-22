@@ -44,9 +44,21 @@ pub struct Limits {
     /// `window_id = floor(Evt.time / dedup_window)` (`03` §3.3, ADR-011;
     /// invariant `dedup_window ≥ 1ms`).
     pub dedup_window: DurationMs,
+    /// Live bounded-out-of-orderness `W` (`08` §2.2 / ADR-004):
+    /// `wm = max(wm_prev, t - W)`. Offline ignores this field.
+    pub max_disorder: DurationMs,
+    /// Live allowed lateness after the watermark (`08` §4): events with
+    /// `wm - allowed_lateness < time ≤ wm` are accepted; older late events
+    /// are dropped to the side-output (`ADGL3003`). Offline ignores this.
+    pub allowed_lateness: DurationMs,
+    /// Live idle-source timeout (`08` §2.3, default 30s): a source without
+    /// events for longer than this is excluded from the global watermark
+    /// `min`. Offline ignores this field.
+    pub idle_timeout: DurationMs,
 }
 
-/// Spec defaults from the ADR-011 "Runtime" table.
+/// Spec defaults from the ADR-011 "Runtime" table plus watermark policy
+/// knobs from ADR-004 / `08` §2–§4.
 impl Default for Limits {
     fn default() -> Limits {
         Limits {
@@ -58,6 +70,9 @@ impl Default for Limits {
             max_lookback: dur(60_000),
             slack: dur(0),
             dedup_window: dur(1_000),
+            max_disorder: dur(0),
+            allowed_lateness: dur(0),
+            idle_timeout: dur(30_000),
         }
     }
 }

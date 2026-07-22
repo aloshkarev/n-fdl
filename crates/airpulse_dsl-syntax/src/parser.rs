@@ -1,9 +1,15 @@
 //! ADGL parser (`docs/idea/spec/02-grammar.ebnf`) implemented with winnow-powered lexing.
 
+// ParseErr grew with expected/found/help suggestions (Task 35); Result<_, ParseErr>
+// trips result_large_err across the recursive-descent surface — keep the rich
+// diagnostics rather than boxing every Err path.
+#![allow(clippy::result_large_err)]
+
 use std::borrow::Cow;
 
 use airpulse_dsl_types::{ActionKind, ScopeType, Severity};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
+use ndsl_trivia::{Trivia, TriviaKind, classify_line_comment, docs_from_leading};
 use winnow::Parser;
 use winnow::error::InputError;
 use winnow::token::take_while;
@@ -58,6 +64,7 @@ enum TokenKind<'a> {
 struct Token<'a> {
     kind: TokenKind<'a>,
     span: Span,
+    leading: Vec<Trivia>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +72,10 @@ struct ParseErr {
     code: &'static str,
     message: Cow<'static, str>,
     expected: Cow<'static, str>,
+    /// What was actually seen at the error span, when known.
+    found: Option<Cow<'static, str>>,
+    /// Short recovery hint (e.g. `did you mean \`evidence\`?`).
+    help: Option<Cow<'static, str>>,
     span: Span,
 }
 
@@ -79,8 +90,20 @@ impl ParseErr {
             code,
             message: message.into(),
             expected: expected.into(),
+            found: None,
+            help: None,
             span,
         }
+    }
+
+    fn found(mut self, found: impl Into<Cow<'static, str>>) -> Self {
+        self.found = Some(found.into());
+        self
+    }
+
+    fn help(mut self, help: impl Into<Cow<'static, str>>) -> Self {
+        self.help = Some(help.into());
+        self
     }
 }
 
@@ -119,9 +142,32 @@ const KEYWORDS: &[&str] = &[
 
 /// Parse an ADGL ruleset from source.
 ///
-/// v1 behavior: this parser stops at the first syntax error and returns a
-/// single diagnostic. Multi-error recovery/reporting is deferred to v1.5.
-pub fn parse_ruleset<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
+/// On rule/decl-level syntax errors the parser records a diagnostic, resyncs to
+/// the next ruleset member (`}` or keywords `evidence` / `decision` /
+/// `mutually_exclusive` / `version` / `requires`), and continues so later errors
+/// accumulate in the same [`DiagBuffer`]. A successful AST is returned only when
+/// no diagnostics were recorded; otherwise `Err(buf)` carries every diagnostic.
+pub fn parse_ruleset(src: &str) -> Result<Ruleset<'_>, DiagBuffer> {
+    match tokenize(src) {
+        Ok(tokens) => {
+            let mut p = ParserState::new(tokens);
+            p.recover = true;
+            match p.parse_ruleset() {
+                Ok(ast) if p.diags.is_empty() => Ok(ast),
+                Ok(_) => Err(std::mem::take(&mut p.diags)),
+                Err(err) => {
+                    p.record_error(err);
+                    Err(std::mem::take(&mut p.diags))
+                }
+            }
+        }
+        Err(err) => Err(diag_from_err(err)),
+    }
+}
+
+/// Fail-fast variant: stops at the first syntax error (no rule/decl recovery).
+#[cfg(test)]
+fn parse_ruleset_fail_fast(src: &str) -> Result<Ruleset<'_>, DiagBuffer> {
     match tokenize(src) {
         Ok(tokens) => match ParserState::new(tokens).parse_ruleset() {
             Ok(ast) => Ok(ast),
@@ -132,7 +178,7 @@ pub fn parse_ruleset<'a>(src: &'a str) -> Result<Ruleset<'a>, DiagBuffer> {
 }
 
 /// Parse an expression for precedence-focused tests.
-pub fn parse_expression<'a>(src: &'a str) -> Result<Expr<'a>, DiagBuffer> {
+pub fn parse_expression(src: &str) -> Result<Expr<'_>, DiagBuffer> {
     match tokenize(src) {
         Ok(tokens) => {
             let mut p = ParserState::new(tokens);
@@ -158,19 +204,118 @@ pub fn parse_expression<'a>(src: &'a str) -> Result<Expr<'a>, DiagBuffer> {
 
 fn diag_from_err(err: ParseErr) -> DiagBuffer {
     let mut buf = DiagBuffer::new();
-    buf.push(Diagnostic::error(
-        err.code,
-        format!("{} (expected: {})", err.message, err.expected),
-        err.span,
-    ));
+    buf.push(diag_of(err));
     buf
+}
+
+fn diag_of(err: ParseErr) -> Diagnostic {
+    let mut msg = match &err.found {
+        Some(found) => format!(
+            "{} (expected: {}, found: {})",
+            err.message, err.expected, found
+        ),
+        None => format!("{} (expected: {})", err.message, err.expected),
+    };
+    if let Some(help) = &err.help {
+        msg.push_str("; ");
+        msg.push_str(help);
+    }
+    Diagnostic::error(err.code, msg, err.span)
+}
+
+fn describe_token_kind(kind: &TokenKind<'_>) -> Cow<'static, str> {
+    match kind {
+        TokenKind::Ident(s) => Cow::Owned((*s).to_string()),
+        TokenKind::String(_) => Cow::Borrowed("string literal"),
+        TokenKind::Int(v) => Cow::Owned(v.to_string()),
+        TokenKind::Duration(ms) => Cow::Owned(format!("{ms}ms")),
+        TokenKind::LBrace => Cow::Borrowed("{"),
+        TokenKind::RBrace => Cow::Borrowed("}"),
+        TokenKind::LParen => Cow::Borrowed("("),
+        TokenKind::RParen => Cow::Borrowed(")"),
+        TokenKind::LBracket => Cow::Borrowed("["),
+        TokenKind::RBracket => Cow::Borrowed("]"),
+        TokenKind::Colon => Cow::Borrowed(":"),
+        TokenKind::Comma => Cow::Borrowed(","),
+        TokenKind::Dot => Cow::Borrowed("."),
+        TokenKind::Eq => Cow::Borrowed("="),
+        TokenKind::Plus => Cow::Borrowed("+"),
+        TokenKind::Minus => Cow::Borrowed("-"),
+        TokenKind::Star => Cow::Borrowed("*"),
+        TokenKind::Slash => Cow::Borrowed("/"),
+        TokenKind::Percent => Cow::Borrowed("%"),
+        TokenKind::Bang => Cow::Borrowed("!"),
+        TokenKind::Lt => Cow::Borrowed("<"),
+        TokenKind::Le => Cow::Borrowed("<="),
+        TokenKind::Gt => Cow::Borrowed(">"),
+        TokenKind::Ge => Cow::Borrowed(">="),
+        TokenKind::EqEq => Cow::Borrowed("=="),
+        TokenKind::Ne => Cow::Borrowed("!="),
+        TokenKind::AndAnd => Cow::Borrowed("&&"),
+        TokenKind::OrOr => Cow::Borrowed("||"),
+        TokenKind::Kw(k) => Cow::Borrowed(*k),
+        TokenKind::Eof => Cow::Borrowed("end of input"),
+    }
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Suggest a keyword/candidate when `found` is a near miss (edit distance ≤ 2).
+fn suggest_near_miss(found: &str, candidates: &[&'static str]) -> Option<&'static str> {
+    let found = found.trim();
+    if found.is_empty() || found == "end of input" {
+        return None;
+    }
+    let mut best: Option<(&'static str, usize)> = None;
+    for &cand in candidates {
+        let d = levenshtein(found, cand);
+        if d == 0 || d > 2 {
+            continue;
+        }
+        // Prefer shorter edits; tie-break on shorter candidate name.
+        let better = match best {
+            None => true,
+            Some((prev, prev_d)) => d < prev_d || (d == prev_d && cand.len() < prev.len()),
+        };
+        if better {
+            best = Some((cand, d));
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
+fn help_did_you_mean(candidate: &str) -> String {
+    format!("did you mean `{candidate}`?")
 }
 
 // ============================================================================
 // Lexer / tokenizer
 // ============================================================================
 
-fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
+fn tokenize(src: &str) -> Result<Vec<Token<'_>>, ParseErr> {
     if src.len() > 4 * 1024 * 1024 {
         return Err(ParseErr::new(
             "ADGL0102",
@@ -180,7 +325,7 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
         ));
     }
 
-    let mut lx = Lexer { src, pos: 0 };
+    let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     let mut depth: usize = 0;
     while !lx.is_eof() {
@@ -188,7 +333,9 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
         if lx.is_eof() {
             break;
         }
-        let tok = lx.next_token()?;
+        let leading = lx.trivia_before_next_token();
+        let mut tok = lx.next_token()?;
+        tok.leading = leading;
         match tok.kind {
             TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
                 depth += 1;
@@ -211,6 +358,7 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
     out.push(Token {
         kind: TokenKind::Eof,
         span: Span::new(src.len(), src.len()),
+        leading: Vec::new(),
     });
     Ok(out)
 }
@@ -218,9 +366,28 @@ fn tokenize<'a>(src: &'a str) -> Result<Vec<Token<'a>>, ParseErr> {
 struct Lexer<'a> {
     src: &'a str,
     pos: usize,
+    /// Trivia collected while skipping ahead to the most recent token.
+    pending_trivia: Vec<Trivia>,
 }
 
 impl<'a> Lexer<'a> {
+    fn new(src: &'a str) -> Self {
+        Self {
+            src,
+            pos: 0,
+            pending_trivia: Vec::new(),
+        }
+    }
+
+    /// Take trivia collected immediately before the most recent token cycle
+    /// (`skip_ws_and_comments` + `next_token`).
+    ///
+    /// Formatters and AST attach will drain this; unit tests cover the API today.
+    #[allow(dead_code)]
+    fn trivia_before_next_token(&mut self) -> Vec<Trivia> {
+        std::mem::take(&mut self.pending_trivia)
+    }
+
     fn is_eof(&self) -> bool {
         self.pos >= self.src.len()
     }
@@ -241,6 +408,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_ws_and_comments(&mut self) -> Result<(), ParseErr> {
+        self.pending_trivia.clear();
         loop {
             let mut consumed = false;
             while matches!(self.peek_char(), Some(' ' | '\t' | '\r' | '\n')) {
@@ -249,14 +417,23 @@ impl<'a> Lexer<'a> {
             }
             if self.rest().starts_with("//") {
                 consumed = true;
-                while let Some(ch) = self.bump_char() {
+                let start = self.pos;
+                while let Some(ch) = self.peek_char() {
                     if ch == '\n' {
                         break;
                     }
+                    let _ = self.bump_char();
                 }
+                let end = self.pos;
+                let text = self.src[start..end].to_owned();
+                self.pending_trivia.push(Trivia {
+                    kind: classify_line_comment(&text),
+                    span: Span::new(start, end),
+                    text,
+                });
             } else if self.rest().starts_with("/*") {
                 consumed = true;
-                let comment_start = self.pos;
+                let start = self.pos;
                 let _ = self.bump_char();
                 let _ = self.bump_char();
                 while !self.is_eof() && !self.rest().starts_with("*/") {
@@ -267,11 +444,17 @@ impl<'a> Lexer<'a> {
                         "ADGL0106",
                         "unclosed block comment",
                         "closing */",
-                        Span::new(comment_start, comment_start + 2),
+                        Span::new(start, start + 2),
                     ));
                 }
                 let _ = self.bump_char();
                 let _ = self.bump_char();
+                let end = self.pos;
+                self.pending_trivia.push(Trivia {
+                    kind: TriviaKind::BlockComment,
+                    span: Span::new(start, end),
+                    text: self.src[start..end].to_owned(),
+                });
             }
             if !consumed {
                 break;
@@ -289,6 +472,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::AndAnd,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("||") {
@@ -296,6 +480,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::OrOr,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("==") {
@@ -303,6 +488,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::EqEq,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("!=") {
@@ -310,6 +496,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Ne,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with("<=") {
@@ -317,6 +504,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Le,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if rest.starts_with(">=") {
@@ -324,6 +512,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Ge,
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
 
@@ -333,6 +522,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LBrace,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('}') => {
@@ -340,6 +530,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RBrace,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('(') => {
@@ -347,6 +538,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LParen,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some(')') => {
@@ -354,6 +546,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RParen,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('[') => {
@@ -361,6 +554,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::LBracket,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some(']') => {
@@ -368,6 +562,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::RBracket,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some(':') => {
@@ -375,6 +570,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Colon,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some(',') => {
@@ -382,6 +578,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Comma,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('.') => {
@@ -389,6 +586,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Dot,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('=') => {
@@ -396,6 +594,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Eq,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('+') => {
@@ -403,6 +602,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Plus,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('-') => {
@@ -410,6 +610,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Minus,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('*') => {
@@ -417,6 +618,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Star,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('/') => {
@@ -424,6 +626,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Slash,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('%') => {
@@ -431,6 +634,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Percent,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('!') => {
@@ -438,6 +642,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Bang,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('<') => {
@@ -445,6 +650,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Lt,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('>') => {
@@ -452,6 +658,7 @@ impl<'a> Lexer<'a> {
                 Ok(Token {
                     kind: TokenKind::Gt,
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 })
             }
             Some('"') => self.lex_string(start),
@@ -469,22 +676,21 @@ impl<'a> Lexer<'a> {
             None => Ok(Token {
                 kind: TokenKind::Eof,
                 span: Span::new(self.pos, self.pos),
+                leading: Vec::new(),
             }),
         }
     }
 
     fn lex_ident_or_kw(&mut self, start: usize) -> Result<Token<'a>, ParseErr> {
         let mut input = self.rest();
-        let parsed: &str = take_while::<_, _, InputError<&str>>(1.., is_ident_continue)
-            .parse_next(&mut input)
-            .map_err(|_| {
-                ParseErr::new(
-                    "ADGL0100",
-                    "malformed identifier",
-                    "identifier",
-                    Span::new(start, start + 1),
-                )
-            })?;
+        let parsed = take_run(&mut input, is_ident_continue).map_err(|_| {
+            ParseErr::new(
+                "ADGL0100",
+                "malformed identifier",
+                "identifier",
+                Span::new(start, start + 1),
+            )
+        })?;
         if parsed.len() > 255 {
             return Err(ParseErr::new(
                 "ADGL0101",
@@ -515,6 +721,7 @@ impl<'a> Lexer<'a> {
         Ok(Token {
             kind,
             span: Span::new(start, self.pos),
+            leading: Vec::new(),
         })
     }
 
@@ -587,6 +794,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Duration(value),
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if unit_rest.starts_with('s') && !starts_ident_continue(unit_rest, 1) {
@@ -594,6 +802,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Duration(value.saturating_mul(1_000)),
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if unit_rest.starts_with("min") {
@@ -601,6 +810,7 @@ impl<'a> Lexer<'a> {
             return Ok(Token {
                 kind: TokenKind::Duration(value.saturating_mul(60_000)),
                 span: Span::new(start, self.pos),
+                leading: Vec::new(),
             });
         }
         if unit_rest.starts_with('m') || unit_rest.starts_with("mi") {
@@ -619,6 +829,7 @@ impl<'a> Lexer<'a> {
         Ok(Token {
             kind: TokenKind::Int(value),
             span: Span::new(start, self.pos),
+            leading: Vec::new(),
         })
     }
 
@@ -630,6 +841,7 @@ impl<'a> Lexer<'a> {
                 return Ok(Token {
                     kind: TokenKind::String(out),
                     span: Span::new(start, self.pos),
+                    leading: Vec::new(),
                 });
             }
             if ch == '\\' {
@@ -713,6 +925,13 @@ fn is_ident_continue(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+/// Maximal run via winnow `take_while` — keeps lexer helpers readable.
+fn take_run<'a>(input: &mut &'a str, pred: impl Fn(char) -> bool) -> Result<&'a str, ()> {
+    take_while::<_, _, InputError<&str>>(1.., pred)
+        .parse_next(input)
+        .map_err(|_| ())
+}
+
 fn keyword_static(s: &str) -> &'static str {
     match s {
         "ruleset" => "ruleset",
@@ -752,11 +971,22 @@ fn keyword_static(s: &str) -> &'static str {
 struct ParserState<'a> {
     tokens: Vec<Token<'a>>,
     idx: usize,
+    /// Nesting depth of `{` / `}` only (ruleset / rule / stmt blocks).
+    brace_depth: usize,
+    /// When true, rule/decl errors are recorded and parsing continues after resync.
+    recover: bool,
+    diags: DiagBuffer,
 }
 
 impl<'a> ParserState<'a> {
     fn new(tokens: Vec<Token<'a>>) -> Self {
-        Self { tokens, idx: 0 }
+        Self {
+            tokens,
+            idx: 0,
+            brace_depth: 0,
+            recover: false,
+            diags: DiagBuffer::new(),
+        }
     }
 
     fn peek(&self) -> &Token<'a> {
@@ -770,9 +1000,83 @@ impl<'a> ParserState<'a> {
 
     fn next(&mut self) -> &Token<'a> {
         if self.idx + 1 < self.tokens.len() {
+            match self.peek_kind() {
+                TokenKind::LBrace => self.brace_depth += 1,
+                TokenKind::RBrace => self.brace_depth = self.brace_depth.saturating_sub(1),
+                _ => {}
+            }
             self.idx += 1;
         }
         self.peek()
+    }
+
+    fn record_error(&mut self, err: ParseErr) {
+        self.diags.push(diag_of(err));
+    }
+
+    fn is_sync_keyword(kw: &str) -> bool {
+        matches!(
+            kw,
+            "evidence" | "decision" | "mutually_exclusive" | "version" | "requires"
+        )
+    }
+
+    /// Sync to the next ruleset member: leave cursor on a sync keyword or the
+    /// ruleset-closing `}` (brace depth 1), consuming the failed rule's `}` when
+    /// present. Keywords inside nested blocks are ignored via brace depth.
+    fn resync_decl_or_rule(&mut self) {
+        let start_idx = self.idx;
+        // Ruleset body sits at depth 1 after `ruleset "…" {`.
+        let target_depth = 1;
+        loop {
+            match self.peek_kind() {
+                TokenKind::Eof => break,
+                TokenKind::Kw(k)
+                    if self.brace_depth == target_depth && Self::is_sync_keyword(k) =>
+                {
+                    break;
+                }
+                TokenKind::RBrace if self.brace_depth == target_depth => {
+                    // Ruleset closer — leave for the caller.
+                    break;
+                }
+                TokenKind::RBrace if self.brace_depth == target_depth + 1 => {
+                    // Close the failed rule/decl block, then stop.
+                    let _ = self.next();
+                    break;
+                }
+                _ => {
+                    let _ = self.next();
+                }
+            }
+        }
+        if self.idx == start_idx {
+            match self.peek_kind() {
+                TokenKind::Eof => {}
+                TokenKind::Kw(k) if Self::is_sync_keyword(k) => {}
+                TokenKind::RBrace if self.brace_depth <= target_depth => {}
+                _ => {
+                    let _ = self.next();
+                }
+            }
+        }
+    }
+
+    /// Record + resync on recovery; otherwise propagate.
+    /// `Ok(None)` means the caller should `continue` the surrounding loop.
+    fn recover_item<T>(&mut self, result: Result<T, ParseErr>) -> Result<Option<T>, ParseErr> {
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => {
+                if self.recover {
+                    self.record_error(e);
+                    self.resync_decl_or_rule();
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     fn consume_kw(&mut self, kw: &'static str) -> Result<Span, ParseErr> {
@@ -782,12 +1086,22 @@ impl<'a> ParserState<'a> {
                 let _ = self.next();
                 Ok(sp)
             }
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                format!("expected keyword '{kw}'"),
-                kw,
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let mut err = ParseErr::new(
+                    "ADGL0100",
+                    format!("expected keyword '{kw}'"),
+                    kw,
+                    self.peek().span,
+                )
+                .found(found.clone());
+                if let Some(s) = suggest_near_miss(found.as_ref(), &[kw]) {
+                    err = err.help(help_did_you_mean(s));
+                } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
+                    err = err.help(help_did_you_mean(s));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -803,12 +1117,20 @@ impl<'a> ParserState<'a> {
                 let _ = self.next();
                 Ok(sp)
             }
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                format!("expected '{word}'"),
-                word,
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let mut err = ParseErr::new(
+                    "ADGL0100",
+                    format!("expected '{word}'"),
+                    word,
+                    self.peek().span,
+                )
+                .found(found.clone());
+                if let Some(s) = suggest_near_miss(found.as_ref(), &[word]) {
+                    err = err.help(help_did_you_mean(s));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -821,17 +1143,21 @@ impl<'a> ParserState<'a> {
             let _ = self.next();
             Ok(tok)
         } else {
-            Err(ParseErr::new(
-                "ADGL0100",
-                "unexpected token",
-                expected,
-                self.peek().span,
-            ))
+            let found = describe_token_kind(self.peek_kind());
+            let mut err = ParseErr::new("ADGL0100", "unexpected token", expected, self.peek().span)
+                .found(found.clone());
+            if expected == ":" {
+                err = err.help("expected `:` after field name");
+            } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
+                err = err.help(help_did_you_mean(s));
+            }
+            Err(err)
         }
     }
 
     fn parse_ruleset(&mut self) -> Result<Ruleset<'a>, ParseErr> {
         // EBNF: Ruleset ::= "ruleset" StringLit "{" RulesetHeader { Rule } "}" ;
+        let doc = docs_from_leading(&self.peek().leading);
         let start = self.consume_kw("ruleset")?.start;
         let name = self.parse_string_lit()?;
         let _ = self.consume_punct(TokenKind::LBrace, "{")?;
@@ -840,10 +1166,18 @@ impl<'a> ParserState<'a> {
         loop {
             match self.peek_kind() {
                 TokenKind::Kw("evidence") => {
-                    rules.push(RuleDecl::Evidence(self.parse_evidence_rule()?))
+                    let parsed = self.parse_evidence_rule();
+                    let Some(rule) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    rules.push(RuleDecl::Evidence(rule));
                 }
                 TokenKind::Kw("decision") => {
-                    rules.push(RuleDecl::Decision(self.parse_decision_rule()?))
+                    let parsed = self.parse_decision_rule();
+                    let Some(rule) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    rules.push(RuleDecl::Decision(rule));
                 }
                 _ => break,
             }
@@ -859,6 +1193,7 @@ impl<'a> ParserState<'a> {
         }
         Ok(Ruleset {
             name,
+            doc,
             header,
             rules,
             span: Span::new(start, end),
@@ -875,11 +1210,19 @@ impl<'a> ParserState<'a> {
         loop {
             match self.peek_kind() {
                 TokenKind::Kw("requires") => {
-                    decls.push(Decl::Requires(self.parse_requires_decl()?))
+                    let parsed = self.parse_requires_decl();
+                    let Some(decl) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    decls.push(Decl::Requires(decl));
                 }
-                TokenKind::Kw("mutually_exclusive") => decls.push(Decl::MutuallyExclusive(
-                    self.parse_mutually_exclusive_decl()?,
-                )),
+                TokenKind::Kw("mutually_exclusive") => {
+                    let parsed = self.parse_mutually_exclusive_decl();
+                    let Some(decl) = self.recover_item(parsed)? else {
+                        continue;
+                    };
+                    decls.push(Decl::MutuallyExclusive(decl));
+                }
                 _ => break,
             }
         }
@@ -944,6 +1287,7 @@ impl<'a> ParserState<'a> {
 
     fn parse_evidence_rule(&mut self) -> Result<EvidenceRule<'a>, ParseErr> {
         // EBNF: EvidenceRule ::= ...
+        let doc = docs_from_leading(&self.peek().leading);
         let start = self.consume_kw("evidence")?.start;
         let name = self.parse_ident_non_kw()?;
         let _ = self.consume_punct(TokenKind::LBrace, "{")?;
@@ -967,6 +1311,7 @@ impl<'a> ParserState<'a> {
         let end = self.consume_punct(TokenKind::RBrace, "}")?.end;
         Ok(EvidenceRule {
             name,
+            doc,
             scope,
             anchor,
             correlates,
@@ -978,6 +1323,7 @@ impl<'a> ParserState<'a> {
 
     fn parse_decision_rule(&mut self) -> Result<DecisionRule<'a>, ParseErr> {
         // EBNF: DecisionRule ::= ...
+        let doc = docs_from_leading(&self.peek().leading);
         let start = self.consume_kw("decision")?.start;
         let name = self.parse_ident_non_kw()?;
         let _ = self.consume_punct(TokenKind::LBrace, "{")?;
@@ -1001,6 +1347,7 @@ impl<'a> ParserState<'a> {
         let end = self.consume_punct(TokenKind::RBrace, "}")?.end;
         Ok(DecisionRule {
             name,
+            doc,
             scope,
             anchor,
             correlates,
@@ -1092,12 +1439,20 @@ impl<'a> ParserState<'a> {
                     span: Span::new(start, end),
                 }))
             }
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                "expected Cause(...) or Problem(...)",
-                "Cause/Problem anchor",
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let help = suggest_near_miss(found.as_ref(), &["Cause", "Problem"])
+                    .map(help_did_you_mean)
+                    .unwrap_or_else(|| "use Cause(Name) or Problem(Name)".into());
+                Err(ParseErr::new(
+                    "ADGL0100",
+                    "expected Cause(...) or Problem(...)",
+                    "Cause/Problem anchor",
+                    self.peek().span,
+                )
+                .found(found)
+                .help(help))
+            }
         }
     }
 
@@ -1258,12 +1613,22 @@ impl<'a> ParserState<'a> {
             TokenKind::Kw("infer") => Ok(Stmt::Infer(self.parse_infer_stmt()?)),
             TokenKind::Kw("emit") => Ok(Stmt::Emit(self.parse_emit_stmt()?)),
             TokenKind::Kw("action") => Ok(Stmt::Action(self.parse_action_stmt()?)),
-            _ => Err(ParseErr::new(
-                "ADGL0100",
-                "unexpected statement",
-                "infer | emit | action",
-                self.peek().span,
-            )),
+            _ => {
+                let found = describe_token_kind(self.peek_kind());
+                let mut err = ParseErr::new(
+                    "ADGL0100",
+                    "unexpected statement",
+                    "infer | emit | action",
+                    self.peek().span,
+                )
+                .found(found.clone());
+                if let Some(s) =
+                    suggest_near_miss(found.as_ref(), &["infer", "emit", "action", "if"])
+                {
+                    err = err.help(help_did_you_mean(s));
+                }
+                Err(err)
+            }
         }
     }
 
@@ -1276,7 +1641,9 @@ impl<'a> ParserState<'a> {
                     "emit is not allowed in evidence rule body",
                     "infer | action",
                     stmt_span(&stmt),
-                ));
+                )
+                .found("emit")
+                .help("move `emit` into a decision rule"));
             }
         } else if matches!(stmt, Stmt::Infer(_)) {
             return Err(ParseErr::new(
@@ -1284,7 +1651,9 @@ impl<'a> ParserState<'a> {
                 "infer is not allowed in decision rule body",
                 "emit | action",
                 stmt_span(&stmt),
-            ));
+            )
+            .found("infer")
+            .help("move `infer` into an evidence rule"));
         }
         Ok(stmt)
     }
@@ -1638,12 +2007,30 @@ impl<'a> ParserState<'a> {
             let _ = self.next();
             Ok(sp)
         } else {
-            Err(ParseErr::new(
-                "ADGL0100",
-                "unexpected token",
-                expected,
-                self.peek().span,
-            ))
+            let found = describe_token_kind(self.peek_kind());
+            let mut err = ParseErr::new("ADGL0100", "unexpected token", expected, self.peek().span)
+                .found(found.clone());
+            if expected == "}" {
+                if let Some(s) = suggest_near_miss(
+                    found.as_ref(),
+                    &[
+                        "evidence",
+                        "decision",
+                        "mutually_exclusive",
+                        "requires",
+                        "version",
+                    ],
+                ) {
+                    err = err.help(help_did_you_mean(s));
+                }
+            } else if expected == ":" {
+                err = err.help("expected `:` after field name");
+            } else if expected == "=" {
+                err = err.help("expected `=` in assignment");
+            } else if let Some(s) = suggest_near_miss(found.as_ref(), KEYWORDS) {
+                err = err.help(help_did_you_mean(s));
+            }
+            Err(err)
         }
     }
 
@@ -1980,7 +2367,9 @@ impl<'a> ParserState<'a> {
                 "expected expression primary",
                 "literal | identifier | (expr)",
                 tok.span,
-            )),
+            )
+            .found(describe_token_kind(&tok.kind))
+            .help("start an expression with a literal, identifier, or `(`")),
         }
     }
 }
@@ -2023,6 +2412,7 @@ pub fn line_col(src: &str, byte_off: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndsl_trivia::{Span as TriviaSpan, TriviaKind};
 
     #[test]
     fn line_col_handles_utf8_boundaries() {
@@ -2047,5 +2437,117 @@ mod tests {
             tokens.get(2).map(|t| &t.kind),
             Some(TokenKind::Duration(120000))
         ));
+    }
+
+    #[test]
+    fn line_comment_preserved_as_trivia() {
+        let src = "// leading note\nruleset";
+        let mut lexer = Lexer::new(src);
+        lexer.skip_ws_and_comments().unwrap();
+        let tok = lexer.next_token().unwrap();
+        assert!(matches!(tok.kind, TokenKind::Kw("ruleset")));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::LineComment);
+        assert_eq!(trivia[0].text, "// leading note");
+        assert_eq!(trivia[0].span, TriviaSpan::new(0, "// leading note".len()));
+    }
+
+    #[test]
+    fn block_comment_preserved_as_trivia() {
+        let src = "/* block */ruleset";
+        let mut lexer = Lexer::new(src);
+        lexer.skip_ws_and_comments().unwrap();
+        let tok = lexer.next_token().unwrap();
+        assert!(matches!(tok.kind, TokenKind::Kw("ruleset")));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::BlockComment);
+        assert_eq!(trivia[0].text, "/* block */");
+        assert_eq!(trivia[0].span, TriviaSpan::new(0, "/* block */".len()));
+    }
+
+    #[test]
+    fn doc_comment_preserved_as_trivia() {
+        let src = "/// hello\nruleset";
+        let mut lexer = Lexer::new(src);
+        lexer.skip_ws_and_comments().unwrap();
+        let tok = lexer.next_token().unwrap();
+        assert!(matches!(tok.kind, TokenKind::Kw("ruleset")));
+
+        let trivia = lexer.trivia_before_next_token();
+        assert_eq!(trivia.len(), 1);
+        assert_eq!(trivia[0].kind, TriviaKind::DocComment);
+        assert_eq!(trivia[0].text, "/// hello");
+    }
+
+    #[test]
+    fn doc_comment_attaches_to_ruleset_and_rules() {
+        let src = r#"
+/// hello
+ruleset "Demo" {
+  version = "1.0"
+  /// evidence note
+  evidence seed {
+    scope: Session
+    anchor a: event(tcp.retransmission_burst)
+    infer Cause(SeedCause) { target: a.target, weight: +50, evidence: [a] }
+  }
+  /// decision note
+  decision verdict {
+    scope: Session
+    anchor c: Cause(SeedCause) { c.confidence >= 50 }
+    emit Problem(SeedProblem) { severity: High, evidence: [c] }
+  }
+}
+"#;
+        let ast = parse_ruleset(src).expect("demo ruleset");
+        assert_eq!(ast.doc.as_deref(), Some("hello"));
+        assert_eq!(ast.rules.len(), 2);
+        match &ast.rules[0] {
+            RuleDecl::Evidence(e) => assert_eq!(e.doc.as_deref(), Some("evidence note")),
+            other => panic!("expected evidence, got {other:?}"),
+        }
+        match &ast.rules[1] {
+            RuleDecl::Decision(d) => assert_eq!(d.doc.as_deref(), Some("decision note")),
+            other => panic!("expected decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unclosed_block_comment_still_errors() {
+        let src = "/* unclosed\nruleset";
+        let mut lexer = Lexer::new(src);
+        let err = lexer.skip_ws_and_comments().unwrap_err();
+        assert_eq!(err.code, "ADGL0106");
+    }
+
+    #[test]
+    fn fail_fast_returns_only_first_rule_error() {
+        let src = r#"
+ruleset "Bad" {
+  version = "1.0"
+  evidence first {
+    scope: Session
+    anchor a: event(tcp.retransmission_burst)
+    emit Problem(X) { severity: High, evidence: [a] }
+  }
+  evidence second {
+    scope: Session
+    anchor b: event(tcp.retransmission_burst)
+    emit Problem(Y) { severity: High, evidence: [b] }
+  }
+}
+"#;
+        let err = parse_ruleset_fail_fast(src).expect_err("must fail");
+        assert_eq!(
+            err.len(),
+            1,
+            "fail-fast must not recover: {}",
+            err.render(src, "ff.adgl")
+        );
+        assert!(err.render(src, "ff.adgl").contains("ADGL0450"));
     }
 }

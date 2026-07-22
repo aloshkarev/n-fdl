@@ -53,6 +53,8 @@ pub struct DurationLit {
 pub struct Ruleset<'a> {
     /// Ruleset name.
     pub name: StringLit,
+    /// Outer doc-comment (`///`) immediately preceding this ruleset, if any.
+    pub doc: Option<String>,
     /// Header fields.
     pub header: RulesetHeader<'a>,
     /// Rules in declaration order.
@@ -113,6 +115,8 @@ pub enum RuleDecl<'a> {
 pub struct EvidenceRule<'a> {
     /// Rule name.
     pub name: Ident<'a>,
+    /// Outer doc-comment (`///`) immediately preceding this rule, if any.
+    pub doc: Option<String>,
     /// Scope.
     pub scope: ScopeType,
     /// Anchor declaration.
@@ -132,6 +136,8 @@ pub struct EvidenceRule<'a> {
 pub struct DecisionRule<'a> {
     /// Rule name.
     pub name: Ident<'a>,
+    /// Outer doc-comment (`///`) immediately preceding this rule, if any.
+    pub doc: Option<String>,
     /// Scope.
     pub scope: ScopeType,
     /// Decision anchor.
@@ -293,7 +299,7 @@ pub enum InferField<'a> {
     Evidence(Vec<Ident<'a>>, Span),
 }
 
-impl<'a> InferField<'a> {
+impl InferField<'_> {
     /// Returns `(value, span)` for `weight: (+|-) IntLit`.
     #[must_use]
     pub const fn weight_value(&self) -> Option<(i64, Span)> {

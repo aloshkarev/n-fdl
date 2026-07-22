@@ -20,7 +20,7 @@ fn expr_has_bidir(expr: &Expr) -> bool {
         Expr::Coalesce { value, default } => expr_has_bidir(value) || expr_has_bidir(default),
         Expr::Tuple(elems) => elems.iter().any(expr_has_bidir),
         Expr::Field(base, _) => expr_has_bidir(base),
-        Expr::Ident(_) | Expr::Int(_) => false,
+        Expr::Ident(_) | Expr::Int(_) | Expr::Str(_) => false,
     }
 }
 
@@ -54,7 +54,7 @@ fn expr_has_modulo_padding(expr: &Expr) -> bool {
         Expr::Call { args, .. } => args.iter().any(expr_has_modulo_padding),
         Expr::Tuple(elems) => elems.iter().any(expr_has_modulo_padding),
         Expr::Field(base, _) => expr_has_modulo_padding(base),
-        Expr::Ident(_) | Expr::Int(_) => false,
+        Expr::Ident(_) | Expr::Int(_) | Expr::Str(_) => false,
     }
 }
 
@@ -78,10 +78,10 @@ fn message_features(msg: &Message) -> (bool, bool, bool, bool, usize) {
         if let NfdlType::MessageRef(_) = field.ty {
             max_depth = max_depth.max(1);
         }
-        if let Some(cond) = &field.conditional {
-            if expr_has_modulo_padding(cond) {
-                has_padding = true;
-            }
+        if let Some(cond) = &field.conditional
+            && expr_has_modulo_padding(cond)
+        {
+            has_padding = true;
         }
     }
 
@@ -167,7 +167,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         .filter(|c| !c.is_whitespace() && *c != '_')
         .collect();
     let stripped = cleaned.strip_prefix("0x").unwrap_or(&cleaned);
-    if stripped.len() % 2 != 0 {
+    if !stripped.len().is_multiple_of(2) {
         return Err(format!("hex string has odd length ({})", stripped.len()));
     }
     (0..stripped.len())
@@ -235,7 +235,7 @@ fn cmd_parse(path: &str) -> Result<Protocol, ()> {
             println!("padding: {}", has_padding);
             println!("Max depth: {}", max_depth_seen);
             println!("Total fields: {}", total_fields);
-            println!("Limits enforced: {}", true);
+            println!("Limits enforced: true");
 
             println!("\n[Production AST]");
             println!("Protocol: {} (endian={})", proto.name, proto.endian);

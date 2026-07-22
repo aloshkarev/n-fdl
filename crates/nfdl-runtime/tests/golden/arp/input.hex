@@ -1,0 +1,10 @@
+# Ethernet/IPv4 ARP request (28 bytes), big-endian wire layout
+00 01          # hw_type = Ethernet (1)
+08 00          # proto_type = IPv4 (0x0800)
+06             # hw_len
+04             # proto_len
+00 01          # opcode = request
+AA AA AA AA AA AA  # sender_mac
+C0 A8 01 01        # sender_ip = 192.168.1.1
+00 00 00 00 00 00  # target_mac (unknown)
+C0 A8 01 02        # target_ip = 192.168.1.2

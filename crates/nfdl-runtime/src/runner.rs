@@ -11,7 +11,7 @@ use crate::session::FlowKey;
 use nfdl_syntax::ast::Expr;
 use nfdl_syntax::{Parser, Protocol};
 
-fn compute_flow_key(key_expr: &Option<Expr>, ctx: &HashMap<String, u64>) -> FlowKey {
+pub(crate) fn compute_flow_key(key_expr: &Option<Expr>, ctx: &HashMap<String, u64>) -> FlowKey {
     // Render an endpoint expression (Tuple or scalar) into a canonical byte string
     // by concatenating each element's big-endian value. Used so that sorting two
     // endpoints is independent of direction (C4/C10, ADR-002 C4).
@@ -191,7 +191,7 @@ pub fn run_protocol(proto: &Protocol) -> Result<Vec<Event>, RuntimeError> {
         }
         ctx.insert("__current_offset".to_string(), vm.current_offset() as u64);
 
-        let root_msg = root_message_name(&proto);
+        let root_msg = root_message_name(proto);
         let (new_state, evs) = fsm.feed(key, &root_msg, &ctx);
         for e in evs {
             bus.emit(e);
@@ -421,15 +421,14 @@ pub fn parse_and_run_with_data_and_limits(
             .iter()
             .find(|(n, _)| n == &b.field)
             .map(|(_, off)| *off);
-        if let Some(start) = payload_start {
-            if let Ok((layer_ctx, layer_evs)) =
+        if let Some(start) = payload_start
+            && let Ok((layer_ctx, layer_evs)) =
                 run_layer(&proto, &b.layer, &data[start..], limits.clone())
-            {
-                for (k, v) in layer_ctx {
-                    ctx.insert(format!("{}.{}", b.layer, k), v);
-                }
-                evs.extend(layer_evs);
+        {
+            for (k, v) in layer_ctx {
+                ctx.insert(format!("{}.{}", b.layer, k), v);
             }
+            evs.extend(layer_evs);
         }
     }
 

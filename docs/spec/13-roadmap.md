@@ -148,3 +148,17 @@ Milestones с deliverables, acceptance criteria и рисками. Каждый 
 - 0 critical/high уязвимостей (DoS, OOB, panic).
 - Документация (эта спека) + примеры.
 - Performance: datagram ARP < 50µs, UDP/DNS < 200µs на типичном x86-64.
+
+## Appendix — Tooling waves (shipped on `feature/nfdl-adgl-tooling-runtime`)
+
+Protocol milestones **M0–M6 above are unchanged**: this appendix records IDE/tooling/runtime-hardening work shipped alongside the spec track, not completion of those milestones.
+
+**Shipped (tooling / dual-track):**
+
+- Trivia, `ndsl-cli`, tree-sitter IDE track, `fmt`, `clippy` (NFDL + ADGLS)
+- Syntax recovery, parse suggestions, docs/`///`
+- Bytecode/VM extract, plugin ABI hardening, SARIF/diagnostics
+- EFSM timers; ADGL late-event / privacy / sink / topology plumbing
+- Includes loader; ADGLS0300 absence-idiom lint
+
+**Policy:** dual-track tree-sitter (editors only; not verify/runtime) — [ADR-013](../adr/ADR-013-dual-track-treesitter.md). Release gates: [PRODUCTION_CHECKLIST.md](../../PRODUCTION_CHECKLIST.md).

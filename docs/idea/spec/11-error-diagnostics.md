@@ -12,6 +12,7 @@ Error =
   | SyntaxError     (lexer/parser, AOT)         ADGL01xx
   | TypeError       (04, AOT)                    ADGL02xx
   | VerificationError (05, AOT)                  ADGL04xx / ADGL05xx
+  | LoaderError     (include/composition, AOT)   ADGL40xx
   | CorrelateError  (runtime, degrade)           ADGL30xx
   | LimitExceeded   (runtime, DoS)               ADGL31xx
   | ActionSinkError (runtime, external)          ADGL32xx
@@ -24,6 +25,7 @@ Error =
 | SyntaxError | AOT | reject spec | нет |
 | TypeError | AOT | reject spec | нет |
 | VerificationError | AOT | reject spec | нет |
+| LoaderError | AOT | reject spec | нет |
 | CorrelateError | runtime | локальный degrade (skip rule / audit) | нет |
 | LimitExceeded | runtime | spill/drop + diagnostic | нет |
 | ActionSinkError | runtime | audit + continue | нет |
@@ -85,6 +87,10 @@ ADGL0450  BipartiteViolation         (C6)
 ADGL0501  EffectInPurePosition       (03 §2)
 ADGL0502  RedundantExclusivity       (05 §7)
 ADGL0503  DedupWindowTooSmall
+ADGL4000  IncludeCycle               (loader include)
+ADGL4001  IncludeIoError             (loader include)
+ADGL4002  MalformedInclude           (loader include)
+ADGL4003  IncludeInternalError       (loader include)
 ```
 
 ## 3. Runtime-диагностика (event bus)

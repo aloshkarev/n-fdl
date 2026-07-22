@@ -2,6 +2,8 @@
 //! Focused on fields, types, simple expressions, validate for datagram protocols.
 //! Now includes full state_machine support with states, transitions, guards and actions.
 
+use ndsl_trivia::Span;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum NfdlType {
     U8,
@@ -20,6 +22,8 @@ pub enum NfdlType {
 pub enum Expr {
     Ident(String),
     Int(i64),
+    /// String literal (e.g. plugin name in `invoke("dns_decompress", ...)`).
+    Str(String),
     Binary {
         op: BinOp,
         left: Box<Expr>,
@@ -95,6 +99,8 @@ pub struct Field {
     pub conditional: Option<Expr>, // if cond
     /// Source order within the enclosing body (for interleaved emission).
     pub order: u32,
+    /// Byte span covering the field production in the source text.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +138,8 @@ pub struct Loop {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub name: String,
+    /// Outer doc-comment (`///`) immediately preceding this message, if any.
+    pub doc: Option<String>,
     pub fields: Vec<Field>,
     pub lets: Vec<Let>,
     pub loops: Vec<Loop>,
@@ -200,6 +208,8 @@ pub struct StateMachine {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Protocol {
     pub name: String,
+    /// Outer doc-comment (`///`) immediately preceding this protocol, if any.
+    pub doc: Option<String>,
     pub endian: String, // "big" | "little"
     pub mode: String,   // "datagram" | "stream"
     pub eof: String,    // EOF source for bytes[EOF]: "" | "on_fin" | "on_close" | "by_plugin(...)"
@@ -212,6 +222,7 @@ impl Default for Protocol {
     fn default() -> Self {
         Self {
             name: String::new(),
+            doc: None,
             endian: "big".to_string(),
             mode: "datagram".to_string(),
             eof: String::new(),

@@ -1,0 +1,5 @@
+include "b.adgl"
+
+ruleset "cycle_a" {
+  version = "1.0"
+}

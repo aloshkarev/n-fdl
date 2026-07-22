@@ -8,6 +8,10 @@ members = [
     "crates/airpulse_dsl-syntax",
     "crates/airpulse_dsl-types",
     "crates/ndsl-diag",
+    "crates/ndsl-fmt",
+    "crates/ndsl-trivia",
+    "crates/ndsl-clippy",
+    "crates/ndsl-cli",
     "crates/nfdl-fuzz",
     "crates/nfdl-syntax",
     "crates/nfdl-types",
@@ -16,6 +20,7 @@ members = [
     "crates/nfdl-bytecode",
     "crates/nfdl-vm",
     "crates/nfdl-runtime",
+    "crates/nfdl-plugin",
     "crates/nfdl-diag",
     "crates/nfdl-cli", "crates/airpulse_dsl-verify",
 ]
@@ -28,6 +33,14 @@ license = "MIT"
 authors = ["Aleksandr Loshkarev <mailbox@aloshkarev.com>"]
 
 [workspace.dependencies]
+ndsl-diag = { path = "crates/ndsl-diag" }
+ndsl-fmt = { path = "crates/ndsl-fmt" }
+ndsl-trivia = { path = "crates/ndsl-trivia" }
+ndsl-clippy = { path = "crates/ndsl-clippy" }
+ndsl-cli = { path = "crates/ndsl-cli" }
+nfdl-bytecode = { path = "crates/nfdl-bytecode" }
+nfdl-vm = { path = "crates/nfdl-vm" }
+nfdl-plugin = { path = "crates/nfdl-plugin" }
 dashmap = "6"
 winnow = "0.7"
 insta = "1"

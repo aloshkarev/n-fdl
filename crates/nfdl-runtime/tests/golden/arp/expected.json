@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "protocol": "ARP",
+  "final_state": "IDLE",
+  "consumed": 28,
+  "fields": {
+    "__current_offset": 28,
+    "hw_len": 6,
+    "hw_type": 1,
+    "opcode": 1,
+    "proto_len": 4,
+    "proto_type": 2048,
+    "sender_ip": 3232235777,
+    "sender_mac": 187649984473770,
+    "target_ip": 3232235778,
+    "target_mac": 0
+  },
+  "events": [
+    {
+      "type": "Message",
+      "msg_type": "ArpPacket",
+      "size": 28
+    }
+  ]
+}

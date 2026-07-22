@@ -14,6 +14,7 @@ path = "src/lib.rs"
 winnow = "0.7"
 airpulse_dsl-types = { path = "../airpulse_dsl-types" }
 ndsl-diag = { path = "../ndsl-diag" }
+ndsl-trivia = { path = "../ndsl-trivia" }
 
 [dev-dependencies]
 insta = "1"

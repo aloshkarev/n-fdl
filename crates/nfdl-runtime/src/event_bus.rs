@@ -24,6 +24,12 @@ impl VecSink {
     }
 }
 
+impl Default for VecSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventSink for VecSink {
     fn emit(&mut self, event: Event) {
         self.events.push(event);

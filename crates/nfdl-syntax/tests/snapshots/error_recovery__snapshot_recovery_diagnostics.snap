@@ -1,0 +1,15 @@
+---
+source: crates/nfdl-syntax/tests/error_recovery.rs
+assertion_line: 120
+expression: summary
+---
+[
+    (
+        Error,
+        "bitfield width must be in 1..=64 (expected: integer 1..=64, found: 0); tip: use e.g. bitfield{8}",
+    ),
+    (
+        Error,
+        "bitfield width must be in 1..=64 (expected: integer 1..=64, found: 65); tip: use e.g. bitfield{8}",
+    ),
+]

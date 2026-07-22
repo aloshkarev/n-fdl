@@ -241,6 +241,66 @@ pub fn rule3_pmtud() -> ProgramImage {
     )
 }
 
+/// Like [`pmtud_hypothesis_rule`] but `if absent(ptb)` — True when the
+/// correlate resolves Absent. Locks `record_resolved_absent` after
+/// `resolve_bindings` (not only the `present()` else / `T3::False` path).
+#[must_use]
+pub fn pmtud_hypothesis_if_absent_rule() -> RuleInstance {
+    let mut rule = pmtud_hypothesis_rule();
+    let prov = ProvKey {
+        rule: RuleId::new("pmtud_hypothesis_if_absent"),
+        cause: CauseKind::new("PmtudBlackhole"),
+        target_expr_hash: 0x9e37_79b9,
+    };
+    rule.id = RuleId::new("pmtud_hypothesis_if_absent");
+    rule.branches = Some(BranchTable {
+        cond: Predicate {
+            ops: Box::new([PredOp::Absent {
+                binding: BindingIdx(1),
+                dst: slot(0),
+            }]),
+            result: slot(0),
+        },
+        then_body: Box::new([Intent::InferCause {
+            cause: CauseKind::new("PmtudBlackhole"),
+            target: MetricPath::new("rtx.target"),
+            weight: weight(35),
+            evidence: Box::new([Symbol::new("rtx")]),
+            provenance_key: prov.clone(),
+            evidence_pii: Box::new([]),
+        }]),
+        else_body: Some(Box::new([Intent::InferCause {
+            cause: CauseKind::new("PmtudBlackhole"),
+            target: MetricPath::new("rtx.target"),
+            weight: weight(85),
+            evidence: Box::new([Symbol::new("rtx"), Symbol::new("ptb")]),
+            provenance_key: prov,
+            evidence_pii: Box::new([]),
+        }])),
+        unknown_body: request_topology_body(),
+    });
+    rule
+}
+
+/// Ruleset with [`pmtud_hypothesis_if_absent_rule`] for late-evidence tests.
+#[must_use]
+pub fn rule3_pmtud_if_absent() -> ProgramImage {
+    ProgramImage::new(
+        ProgramImage::pack_version(1, 0, 0),
+        "airpulse.tcp_diagnostics_if_absent",
+        Box::new(["l3-deep".into(), "topology".into()]),
+        Box::new([airpulse_dsl_ir::ExclusivityGroup {
+            causes: Box::new([
+                CauseKind::new("PmtudBlackhole"),
+                CauseKind::new("Congestion"),
+                CauseKind::new("TransientL2Disruption"),
+            ]),
+        }]),
+        Box::new([pmtud_hypothesis_if_absent_rule(), pmtud_verdict_rule()]),
+        catalog_ref(),
+    )
+}
+
 /// Example 07 `suppress_downstream` — decision rule:
 ///
 /// ```adgl

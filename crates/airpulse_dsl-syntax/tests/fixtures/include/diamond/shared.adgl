@@ -1,0 +1,10 @@
+ruleset "shared" {
+  version = "1.0"
+  evidence shared_ev {
+    scope: AccessPoint
+    anchor a: event(test.shared) {
+      a.x == 1
+    }
+    infer Cause(SharedSignal) { target: a.target, weight: +10, evidence: [a] }
+  }
+}

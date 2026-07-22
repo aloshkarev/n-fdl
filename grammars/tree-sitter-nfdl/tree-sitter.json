@@ -1,0 +1,32 @@
+{
+  "grammars": [
+    {
+      "name": "nfdl",
+      "camelcase": "Nfdl",
+      "scope": "source.nfdl",
+      "path": ".",
+      "file-types": ["nfdl"],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "folds": "queries/folds.scm",
+      "injection-regex": "^nfdl$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "N-FDL grammar for tree-sitter (IDE track)",
+    "links": {
+      "repository": "https://github.com/n-fdl/n-fdl"
+    }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false,
+    "zig": false
+  }
+}
