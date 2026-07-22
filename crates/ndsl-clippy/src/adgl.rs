@@ -1,12 +1,13 @@
-//! First-wave ADGL style lint pack (`ADGLS0001`–`ADGLS0299`).
+//! ADGL style lint pack (`ADGLS0001`–`ADGLS0399`).
 //!
 //! Registered by [`register_adgl_pack`] from [`crate::builtin::register_builtins`].
 //! Uses the canonical Rust parser (`airpulse_dsl_syntax::parse_ruleset`) — not tree-sitter.
 
 use crate::{LintCheck, LintContext, LintDef, LintDiagnostic, LintId, LintLevel, LintStore};
 use airpulse_dsl_syntax::ast::{
-    ActionField, ActionStmt, AnchorBlock, CorrelateBlock, DecisionAnchor, DecisionRule, EmitField,
-    EmitStmt, EvidenceRule, Expr, ExprKind, InferField, InferStmt, RuleDecl, Ruleset, Stmt,
+    ActionField, ActionStmt, AnchorBlock, CorrelateBlock, CorrelateSource, DecisionAnchor,
+    DecisionRule, EmitField, EmitStmt, EvidenceRule, Expr, ExprKind, InferField, InferStmt,
+    KindIdent, RuleDecl, Ruleset, Stmt,
 };
 use ndsl_diag::Span;
 use std::collections::HashSet;
@@ -17,6 +18,8 @@ pub const ADGLS_UNUSED_CORRELATE: LintId = LintId::new("ADGLS0001");
 pub const ADGLS_FLOAT_LITERAL: LintId = LintId::new("ADGLS0100");
 /// `having: count >= 1` is redundant with the omitted default (empty / no-op having).
 pub const ADGLS_EMPTY_HAVING: LintId = LintId::new("ADGLS0200");
+/// Absence-named signal without explicit `present`/`absent` correlate idiom.
+pub const ADGLS_ABSENCE_IDIOM: LintId = LintId::new("ADGLS0300");
 
 pub fn register_adgl_pack(store: &mut LintStore) {
     store.register(
@@ -42,6 +45,14 @@ pub fn register_adgl_pack(store: &mut LintStore) {
             description: "having: count >= 1 is redundant (omit having; default is 1)",
         },
         check_empty_having as LintCheck,
+    );
+    store.register(
+        LintDef {
+            id: ADGLS_ABSENCE_IDIOM,
+            default_level: LintLevel::Warn,
+            description: "absence-named signal without present/absent correlate idiom",
+        },
+        check_absence_idiom as LintCheck,
     );
 }
 
@@ -274,6 +285,380 @@ fn check_empty_having(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
         }
     }
     out
+}
+
+/// Suggest `present`/`absent` correlate idioms when absence-named signals appear
+/// without any explicit correlate presence check (`docs/ABSENCE_SEMANTICS.md`).
+///
+/// Heuristic only — no IR/counterfactual sugar. Does not fire when the rule
+/// already uses `present(...)` or `absent(...)`.
+fn check_absence_idiom(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    let Some(rs) = ruleset(ctx) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for rule in &rs.rules {
+        match rule {
+            RuleDecl::Evidence(ev) => {
+                if rule_uses_present_or_absent_evidence(ev) {
+                    continue;
+                }
+                if let Some((name, span)) = first_absence_named_in_evidence(ev) {
+                    out.push(absence_idiom_diagnostic(name, span));
+                }
+            }
+            RuleDecl::Decision(dec) => {
+                if rule_uses_present_or_absent_decision(dec) {
+                    continue;
+                }
+                if let Some((name, span)) = first_absence_named_in_decision(dec) {
+                    out.push(absence_idiom_diagnostic(name, span));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn absence_idiom_diagnostic(name: &str, span: Span) -> LintDiagnostic {
+    LintDiagnostic::new(
+        ADGLS_ABSENCE_IDIOM,
+        LintLevel::Warn,
+        format!(
+            "absence-named signal `{name}` without `present`/`absent` correlate idiom; \
+             prefer explicit `present(binding)` / `absent(binding)` (absence-as-code) \
+             over silent all-positives-failed counters — see ABSENCE_SEMANTICS"
+        ),
+        span,
+    )
+}
+
+/// Naming from `docs/ABSENCE_SEMANTICS.md` plus related unanswered/missing idioms.
+fn is_absence_named(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.contains("unanswered")
+        || n.contains("missing")
+        || n.contains("absent")
+        || n.contains("without")
+        || n.contains("incomplete")
+        || n.contains("no_response")
+        || n.contains("noresponse")
+        || n.contains("absence")
+}
+
+fn rule_uses_present_or_absent_evidence(ev: &EvidenceRule<'_>) -> bool {
+    let mut found = false;
+    scan_present_absent_in_anchor(&ev.anchor, &mut found);
+    for c in &ev.correlates {
+        scan_present_absent_in_correlate(c, &mut found);
+    }
+    if let Some(ie) = &ev.if_else {
+        scan_present_absent_in_expr(&ie.condition, &mut found);
+        scan_present_absent_in_stmts(&ie.then_body, &mut found);
+        if let Some(else_body) = &ie.else_body {
+            scan_present_absent_in_stmts(else_body, &mut found);
+        }
+    }
+    scan_present_absent_in_stmts(&ev.body, &mut found);
+    found
+}
+
+fn rule_uses_present_or_absent_decision(dec: &DecisionRule<'_>) -> bool {
+    let mut found = false;
+    scan_present_absent_in_decision_anchor(&dec.anchor, &mut found);
+    for c in &dec.correlates {
+        scan_present_absent_in_correlate(c, &mut found);
+    }
+    if let Some(ie) = &dec.if_else {
+        scan_present_absent_in_expr(&ie.condition, &mut found);
+        scan_present_absent_in_stmts(&ie.then_body, &mut found);
+        if let Some(else_body) = &ie.else_body {
+            scan_present_absent_in_stmts(else_body, &mut found);
+        }
+    }
+    scan_present_absent_in_stmts(&dec.body, &mut found);
+    found
+}
+
+fn scan_present_absent_in_anchor(anchor: &AnchorBlock<'_>, found: &mut bool) {
+    if let Some(pred) = &anchor.predicate {
+        scan_present_absent_in_expr(pred, found);
+    }
+}
+
+fn scan_present_absent_in_decision_anchor(anchor: &DecisionAnchor<'_>, found: &mut bool) {
+    match anchor {
+        DecisionAnchor::Cause(c) => scan_present_absent_in_expr(&c.predicate, found),
+        DecisionAnchor::Problem(p) => {
+            if let Some(pred) = &p.predicate {
+                scan_present_absent_in_expr(pred, found);
+            }
+        }
+    }
+}
+
+fn scan_present_absent_in_correlate(c: &CorrelateBlock<'_>, found: &mut bool) {
+    for arg in &c.topo.args {
+        scan_present_absent_in_expr(arg, found);
+    }
+    scan_present_absent_in_expr(&c.time.probe, found);
+    scan_present_absent_in_expr(&c.time.start, found);
+    scan_present_absent_in_expr(&c.time.end, found);
+}
+
+fn scan_present_absent_in_stmts(stmts: &[Stmt<'_>], found: &mut bool) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Infer(inf) => {
+                for field in &inf.fields {
+                    if let InferField::Target(expr, _) = field {
+                        scan_present_absent_in_expr(expr, found);
+                    }
+                }
+            }
+            Stmt::Emit(em) => {
+                for field in &em.fields {
+                    if let EmitField::Target(expr, _) = field {
+                        scan_present_absent_in_expr(expr, found);
+                    }
+                }
+            }
+            Stmt::Action(act) => {
+                for field in &act.fields {
+                    if let ActionField::Target(expr, _) = field {
+                        scan_present_absent_in_expr(expr, found);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn scan_present_absent_in_expr(expr: &Expr<'_>, found: &mut bool) {
+    if *found {
+        return;
+    }
+    match &expr.kind {
+        ExprKind::Present(_) | ExprKind::Absent(_) => *found = true,
+        ExprKind::Int(_)
+        | ExprKind::Duration(_)
+        | ExprKind::String(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Ident(_) => {}
+        ExprKind::Unary { expr, .. } => scan_present_absent_in_expr(expr, found),
+        ExprKind::Binary { left, right, .. } => {
+            scan_present_absent_in_expr(left, found);
+            scan_present_absent_in_expr(right, found);
+        }
+        ExprKind::Field { base, .. } => scan_present_absent_in_expr(base, found),
+        ExprKind::Call { callee, args } => {
+            scan_present_absent_in_expr(callee, found);
+            for a in args {
+                scan_present_absent_in_expr(a, found);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            scan_present_absent_in_expr(base, found);
+            scan_present_absent_in_expr(index, found);
+        }
+    }
+}
+
+fn first_absence_named_in_evidence<'a>(ev: &'a EvidenceRule<'a>) -> Option<(&'a str, Span)> {
+    if is_absence_named(ev.name.name) {
+        return Some((ev.name.name, ev.name.span));
+    }
+    if let Some(hit) = first_absence_in_kind(&ev.anchor.event_type) {
+        return Some(hit);
+    }
+    if let Some(pred) = &ev.anchor.predicate {
+        if let Some(hit) = first_absence_in_expr(pred) {
+            return Some(hit);
+        }
+    }
+    for c in &ev.correlates {
+        if let Some(hit) = first_absence_in_correlate(c) {
+            return Some(hit);
+        }
+    }
+    if let Some(ie) = &ev.if_else {
+        if let Some(hit) = first_absence_in_expr(&ie.condition) {
+            return Some(hit);
+        }
+        if let Some(hit) = first_absence_in_stmts(&ie.then_body) {
+            return Some(hit);
+        }
+        if let Some(else_body) = &ie.else_body {
+            if let Some(hit) = first_absence_in_stmts(else_body) {
+                return Some(hit);
+            }
+        }
+    }
+    first_absence_in_stmts(&ev.body)
+}
+
+fn first_absence_named_in_decision<'a>(dec: &'a DecisionRule<'a>) -> Option<(&'a str, Span)> {
+    if is_absence_named(dec.name.name) {
+        return Some((dec.name.name, dec.name.span));
+    }
+    match &dec.anchor {
+        DecisionAnchor::Cause(c) => {
+            if is_absence_named(c.cause.name) {
+                return Some((c.cause.name, c.cause.span));
+            }
+            if let Some(hit) = first_absence_in_expr(&c.predicate) {
+                return Some(hit);
+            }
+        }
+        DecisionAnchor::Problem(p) => {
+            if is_absence_named(p.problem.name) {
+                return Some((p.problem.name, p.problem.span));
+            }
+            if let Some(pred) = &p.predicate {
+                if let Some(hit) = first_absence_in_expr(pred) {
+                    return Some(hit);
+                }
+            }
+        }
+    }
+    for c in &dec.correlates {
+        if let Some(hit) = first_absence_in_correlate(c) {
+            return Some(hit);
+        }
+    }
+    if let Some(ie) = &dec.if_else {
+        if let Some(hit) = first_absence_in_expr(&ie.condition) {
+            return Some(hit);
+        }
+        if let Some(hit) = first_absence_in_stmts(&ie.then_body) {
+            return Some(hit);
+        }
+        if let Some(else_body) = &ie.else_body {
+            if let Some(hit) = first_absence_in_stmts(else_body) {
+                return Some(hit);
+            }
+        }
+    }
+    first_absence_in_stmts(&dec.body)
+}
+
+fn first_absence_in_correlate<'a>(c: &'a CorrelateBlock<'a>) -> Option<(&'a str, Span)> {
+    if is_absence_named(c.binding.name) {
+        return Some((c.binding.name, c.binding.span));
+    }
+    match &c.source {
+        CorrelateSource::Event(k) => {
+            if let Some(hit) = first_absence_in_kind(k) {
+                return Some(hit);
+            }
+        }
+        CorrelateSource::Problem(id) | CorrelateSource::Cause(id) => {
+            if is_absence_named(id.name) {
+                return Some((id.name, id.span));
+            }
+        }
+    }
+    for arg in &c.topo.args {
+        if let Some(hit) = first_absence_in_expr(arg) {
+            return Some(hit);
+        }
+    }
+    first_absence_in_expr(&c.time.probe)
+        .or_else(|| first_absence_in_expr(&c.time.start))
+        .or_else(|| first_absence_in_expr(&c.time.end))
+}
+
+fn first_absence_in_stmts<'a>(stmts: &'a [Stmt<'a>]) -> Option<(&'a str, Span)> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Infer(inf) => {
+                if is_absence_named(inf.cause.name) {
+                    return Some((inf.cause.name, inf.cause.span));
+                }
+                for field in &inf.fields {
+                    if let InferField::Target(expr, _) = field {
+                        if let Some(hit) = first_absence_in_expr(expr) {
+                            return Some(hit);
+                        }
+                    }
+                }
+            }
+            Stmt::Emit(em) => {
+                if is_absence_named(em.problem.name) {
+                    return Some((em.problem.name, em.problem.span));
+                }
+                for field in &em.fields {
+                    if let EmitField::Target(expr, _) = field {
+                        if let Some(hit) = first_absence_in_expr(expr) {
+                            return Some(hit);
+                        }
+                    }
+                }
+            }
+            Stmt::Action(act) => {
+                for field in &act.fields {
+                    if let ActionField::Target(expr, _) = field {
+                        if let Some(hit) = first_absence_in_expr(expr) {
+                            return Some(hit);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn first_absence_in_kind<'a>(k: &'a KindIdent<'a>) -> Option<(&'a str, Span)> {
+    for seg in &k.segments {
+        if is_absence_named(seg.name) {
+            return Some((seg.name, seg.span));
+        }
+    }
+    None
+}
+
+fn first_absence_in_expr<'a>(expr: &'a Expr<'a>) -> Option<(&'a str, Span)> {
+    match &expr.kind {
+        ExprKind::Ident(id) => {
+            if is_absence_named(id.name) {
+                Some((id.name, id.span))
+            } else {
+                None
+            }
+        }
+        ExprKind::Present(_)
+        | ExprKind::Absent(_)
+        | ExprKind::Int(_)
+        | ExprKind::Duration(_)
+        | ExprKind::String(_)
+        | ExprKind::Bool(_) => None,
+        ExprKind::Unary { expr, .. } => first_absence_in_expr(expr),
+        ExprKind::Binary { left, right, .. } => {
+            first_absence_in_expr(left).or_else(|| first_absence_in_expr(right))
+        }
+        ExprKind::Field { base, field } => {
+            if is_absence_named(field.name) {
+                Some((field.name, field.span))
+            } else {
+                first_absence_in_expr(base)
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            if let Some(hit) = first_absence_in_expr(callee) {
+                return Some(hit);
+            }
+            for a in args {
+                if let Some(hit) = first_absence_in_expr(a) {
+                    return Some(hit);
+                }
+            }
+            None
+        }
+        ExprKind::Index { base, index } => {
+            first_absence_in_expr(base).or_else(|| first_absence_in_expr(index))
+        }
+    }
 }
 
 /// Scan ADGL source for float literals outside strings/comments.
@@ -624,6 +1009,67 @@ ruleset "t" {
     }
 
     #[test]
+    fn absence_named_without_present_absent_warns() {
+        let src = minimal_ruleset(
+            r#"
+    evidence dhcp_missing_offer {
+        scope: Global
+        anchor h: event(dhcp.summary) {
+            h.discover_without_offer >= 1
+        }
+        infer Cause(DhcpMissingOfferSignal) { target: h.target, weight: +65, evidence: [h] }
+    }
+"#,
+        );
+        let diags = lint(&src);
+        assert!(
+            diags.iter().any(|d| {
+                d.diagnostic.id == ADGLS_ABSENCE_IDIOM
+                    && d.diagnostic.message.contains("present(binding)")
+                    && d.diagnostic.message.contains("absent(binding)")
+            }),
+            "expected ADGLS0300 with present/absent suggestion, got: {:?}",
+            diags
+                .iter()
+                .map(|d| (&d.diagnostic.id, &d.diagnostic.message))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn absence_named_with_present_absent_does_not_warn() {
+        let src = minimal_ruleset(
+            r#"
+    evidence dhcp_missing_offer {
+        scope: Session
+        anchor h: event(dhcp.discover) {
+            h.xid > 0
+        }
+        correlate offer: event(dhcp.offer) {
+            topo: same_session(h.target, offer.target)
+            time: offer.time in [h.time, h.time + 5s]
+        }
+        if absent(offer) {
+            infer Cause(DhcpMissingOfferSignal) { target: h.target, weight: +65, evidence: [h] }
+        }
+    }
+"#,
+        );
+        let diags = lint(&src);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM),
+            "present/absent idiom must suppress ADGLS0300, got: {:?}",
+            diags
+                .iter()
+                .filter(|d| d.diagnostic.id == ADGLS_ABSENCE_IDIOM)
+                .map(|d| &d.diagnostic.message)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn healthy_pmtud_snippet_has_no_adgl_pack_lints() {
         let src = include_str!("../../../docs/idea/examples/01-pmtud-blackhole.adgl");
         let diags = lint(src);
@@ -632,7 +1078,7 @@ ruleset "t" {
             .filter(|d| {
                 matches!(
                     d.diagnostic.id.as_str(),
-                    "ADGLS0001" | "ADGLS0100" | "ADGLS0200"
+                    "ADGLS0001" | "ADGLS0100" | "ADGLS0200" | "ADGLS0300"
                 )
             })
             .collect();

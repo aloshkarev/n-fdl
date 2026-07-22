@@ -18,7 +18,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-pub use adgl::{ADGLS_EMPTY_HAVING, ADGLS_FLOAT_LITERAL, ADGLS_UNUSED_CORRELATE};
+pub use adgl::{
+    ADGLS_ABSENCE_IDIOM, ADGLS_EMPTY_HAVING, ADGLS_FLOAT_LITERAL, ADGLS_UNUSED_CORRELATE,
+};
 pub use builtin::NFDL_EMPTY_FILE;
 pub use ndsl_diag::Span;
 pub use nfdl::{
@@ -515,8 +517,8 @@ mod tests {
     fn lint_store_register_builtin_registers_demo() {
         let mut store = LintStore::new();
         store.register_builtin();
-        // N-FDL pack (5) + ADGL pack (3) + engine-smoke NFDL0900.
-        assert_eq!(store.len(), 9);
+        // N-FDL pack (5) + ADGL pack (4) + engine-smoke NFDL0900.
+        assert_eq!(store.len(), 10);
         assert_eq!(
             store.effective_level(NFDL_EMPTY_FILE),
             LintLevel::Warn
@@ -526,6 +528,7 @@ mod tests {
             store.effective_level(ADGLS_UNUSED_CORRELATE),
             LintLevel::Warn
         );
+        assert_eq!(store.effective_level(ADGLS_ABSENCE_IDIOM), LintLevel::Warn);
     }
 
     #[test]
