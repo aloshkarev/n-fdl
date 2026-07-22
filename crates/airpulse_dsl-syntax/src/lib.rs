@@ -8,7 +8,9 @@
 //! targeted winnow helpers), and parsing uses a token-stream recursive descent.
 
 pub mod ast;
+mod include;
 mod parser;
 
 pub use ast::*;
+pub use include::{load_ruleset, LoadedRuleset};
 pub use parser::{line_col, parse_expression, parse_ruleset};
