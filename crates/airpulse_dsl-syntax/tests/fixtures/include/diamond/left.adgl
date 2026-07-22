@@ -1,0 +1,12 @@
+include "shared.adgl"
+
+ruleset "left" {
+  version = "1.0"
+  evidence left_ev {
+    scope: AccessPoint
+    anchor a: event(test.left) {
+      a.y == 1
+    }
+    infer Cause(LeftSignal) { target: a.target, weight: +10, evidence: [a] }
+  }
+}

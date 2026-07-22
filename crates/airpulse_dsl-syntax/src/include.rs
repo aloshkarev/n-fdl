@@ -14,6 +14,8 @@
 //! - Included files are full ADGL rulesets (they may themselves `include`).
 //! - Composition keeps the **entry** ruleset name / version / header decls and
 //!   **prepends** rules from includes (depth-first) ahead of the entry's own rules.
+//! - Each canonical path is expanded **once** (DAG / diamond includes do not
+//!   duplicate rules). Cycles on the active DFS stack still fail.
 //! - Header decls (`requires`, `mutually_exclusive`) from included files are
 //!   ignored in this first cut.
 //!
@@ -27,6 +29,7 @@
 use crate::ast::Ruleset;
 use crate::parser::parse_ruleset;
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -55,7 +58,8 @@ pub fn load_ruleset(path: impl AsRef<Path>) -> Result<LoadedRuleset, DiagBuffer>
     let path = path.as_ref();
     let mut stack = Vec::new();
     let mut files = Vec::new();
-    let expanded = expand_file(path, &mut stack, &mut files)?;
+    let mut expanded_once = HashSet::new();
+    let expanded = expand_file(path, &mut stack, &mut files, &mut expanded_once)?;
     let source = compose_entry(&expanded.body, &expanded.imported_rules_text)?;
     Ok(LoadedRuleset {
         entry: files.first().cloned().unwrap_or_else(|| path.to_path_buf()),
@@ -69,14 +73,17 @@ struct ExpandedFile {
     body: String,
     /// Text of rules collected from includes (depth-first), ready to splice.
     imported_rules_text: String,
+    /// `false` when this path was already expanded via another parent (DAG memo).
+    emit_own_rules: bool,
 }
 
 fn expand_file(
     path: &Path,
     stack: &mut Vec<PathBuf>,
     files: &mut Vec<PathBuf>,
+    expanded_once: &mut HashSet<PathBuf>,
 ) -> Result<ExpandedFile, DiagBuffer> {
-    expand_file_from_include(path, &Span::unknown(), stack, files)
+    expand_file_from_include(path, &Span::unknown(), stack, files, expanded_once)
 }
 
 fn expand_file_from_include(
@@ -84,10 +91,20 @@ fn expand_file_from_include(
     include_span: &Span,
     stack: &mut Vec<PathBuf>,
     files: &mut Vec<PathBuf>,
+    expanded_once: &mut HashSet<PathBuf>,
 ) -> Result<ExpandedFile, DiagBuffer> {
     let canon = canonicalize_existing(path, *include_span)?;
     if let Some(cycle_from) = stack.iter().position(|p| p == &canon) {
         return Err(cycle_diagnostic(stack, cycle_from, &canon));
+    }
+
+    // Diamond / multi-parent: expand each canonical path once; do not re-emit rules.
+    if expanded_once.contains(&canon) {
+        return Ok(ExpandedFile {
+            body: String::new(),
+            imported_rules_text: String::new(),
+            emit_own_rules: false,
+        });
     }
 
     stack.push(canon.clone());
@@ -108,18 +125,23 @@ fn expand_file_from_include(
     let parent = canon.parent().unwrap_or_else(|| Path::new("."));
     for inc in &includes {
         let child_path = parent.join(&inc.path);
-        let child = expand_file_from_include(&child_path, &inc.span, stack, files)?;
+        let child =
+            expand_file_from_include(&child_path, &inc.span, stack, files, expanded_once)?;
         imported_rules_text.push_str(&child.imported_rules_text);
-        imported_rules_text.push_str(&rules_text_from_body(&child.body)?);
-        if !imported_rules_text.is_empty() && !imported_rules_text.ends_with('\n') {
-            imported_rules_text.push('\n');
+        if child.emit_own_rules {
+            imported_rules_text.push_str(&rules_text_from_body(&child.body)?);
+            if !imported_rules_text.is_empty() && !imported_rules_text.ends_with('\n') {
+                imported_rules_text.push('\n');
+            }
         }
     }
 
     stack.pop();
+    expanded_once.insert(canon);
     Ok(ExpandedFile {
         body,
         imported_rules_text,
+        emit_own_rules: true,
     })
 }
 
@@ -134,7 +156,7 @@ fn rules_text_from_body(body: &str) -> Result<String, DiagBuffer> {
         if span.end > body.len() || span.start > span.end {
             let mut buf = DiagBuffer::new();
             buf.push(Diagnostic::error(
-                "ADGL0203",
+                "ADGL4003",
                 "internal error: rule span out of bounds while expanding include",
                 Span::unknown(),
             ));
@@ -159,7 +181,7 @@ fn compose_entry(body: &str, imported_rules: &str) -> Result<String, DiagBuffer>
             let close = ast.span.end.checked_sub(1).ok_or_else(|| {
                 let mut buf = DiagBuffer::new();
                 buf.push(Diagnostic::error(
-                    "ADGL0203",
+                    "ADGL4003",
                     "internal error: empty ruleset span while composing includes",
                     Span::unknown(),
                 ));
@@ -168,7 +190,7 @@ fn compose_entry(body: &str, imported_rules: &str) -> Result<String, DiagBuffer>
             if body.as_bytes().get(close) != Some(&b'}') {
                 let mut buf = DiagBuffer::new();
                 buf.push(Diagnostic::error(
-                    "ADGL0203",
+                    "ADGL4003",
                     "internal error: ruleset span does not end at '}' while composing includes",
                     Span::new(close, close.saturating_add(1).min(body.len())),
                 ));
@@ -352,7 +374,7 @@ fn cycle_diagnostic(stack: &[PathBuf], from: usize, again: &Path) -> DiagBuffer 
     chain.push(display_name(again));
     let mut buf = DiagBuffer::new();
     buf.push(Diagnostic::error(
-        "ADGL0200",
+        "ADGL4000",
         format!("include cycle detected: {}", chain.join(" -> ")),
         Span::unknown(),
     ));
@@ -367,14 +389,14 @@ fn display_name(path: &Path) -> String {
 
 fn io_diagnostic(message: impl Into<String>, span: Span) -> DiagBuffer {
     let mut buf = DiagBuffer::new();
-    buf.push(Diagnostic::error("ADGL0201", message, span));
+    buf.push(Diagnostic::error("ADGL4001", message, span));
     buf
 }
 
 fn malformed_include(file: &Path, message: impl Into<String>, span: Span) -> DiagBuffer {
     let mut buf = DiagBuffer::new();
     buf.push(Diagnostic::error(
-        "ADGL0202",
+        "ADGL4002",
         format!("{} ({})", message.into(), file.display()),
         span,
     ));

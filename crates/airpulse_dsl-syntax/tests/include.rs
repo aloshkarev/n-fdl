@@ -13,6 +13,16 @@ fn fixture(parts: &[&str]) -> PathBuf {
     p
 }
 
+fn rule_names<'a>(ast: &'a airpulse_dsl_syntax::Ruleset<'a>) -> Vec<&'a str> {
+    ast.rules
+        .iter()
+        .map(|r| match r {
+            RuleDecl::Evidence(e) => e.name.name,
+            RuleDecl::Decision(d) => d.name.name,
+        })
+        .collect()
+}
+
 #[test]
 fn load_ruleset_merges_included_rules() {
     let path = fixture(&["include", "ok", "main.adgl"]);
@@ -20,15 +30,7 @@ fn load_ruleset_merges_included_rules() {
     let ast = loaded.parse().expect("parse composed source");
 
     assert_eq!(ast.name.value, "main");
-    let names: Vec<&str> = ast
-        .rules
-        .iter()
-        .map(|r| match r {
-            RuleDecl::Evidence(e) => e.name.name,
-            RuleDecl::Decision(d) => d.name.name,
-        })
-        .collect();
-    assert_eq!(names, ["shared_ev", "main_ev"]);
+    assert_eq!(rule_names(&ast), ["shared_ev", "main_ev"]);
 
     // Single-file API still rejects raw include syntax.
     let raw = std::fs::read_to_string(&path).unwrap();
@@ -48,11 +50,33 @@ fn load_ruleset_detects_include_cycle() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        msg.contains("ADGL0200") && msg.contains("cycle"),
+        msg.contains("ADGL4000") && msg.contains("cycle"),
         "expected cycle diagnostic, got:\n{msg}"
     );
     assert!(
         msg.contains("a.adgl") && msg.contains("b.adgl"),
         "cycle path should name both files, got:\n{msg}"
+    );
+}
+
+#[test]
+fn load_ruleset_diamond_include_expands_once() {
+    let path = fixture(&["include", "diamond", "entry.adgl"]);
+    let loaded = load_ruleset(&path).expect("load diamond include");
+    let ast = loaded.parse().expect("parse composed source");
+
+    assert_eq!(ast.name.value, "entry");
+    // Depth-first: left→shared, then right (shared already expanded → skip).
+    assert_eq!(
+        rule_names(&ast),
+        ["shared_ev", "left_ev", "right_ev", "entry_ev"]
+    );
+    assert_eq!(
+        rule_names(&ast)
+            .iter()
+            .filter(|n| **n == "shared_ev")
+            .count(),
+        1,
+        "shared rules must appear once under diamond includes"
     );
 }
