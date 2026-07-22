@@ -135,6 +135,44 @@ fn offline_late_evidence_after_absent_audits_adgl3002_without_retroactive_infer(
 }
 
 #[test]
+fn offline_late_evidence_after_if_absent_true_audits_adgl3002() {
+    // Review fix: record_resolved_absent must run after resolve_bindings for
+    // `if absent(...)` (True = Absent), not only the `present()` else path.
+    let img = Box::leak(Box::new(fixtures::rule3_pmtud_if_absent()));
+    let mut eng = Engine::new(
+        img,
+        StaticTopology::new(Limits::default().max_topology_hops),
+        OfflineAuditSink::new(),
+        Limits::default(),
+        RunMode::Offline,
+    );
+    let s = session();
+
+    eng.ingest(rtx(1, 10_000, s));
+    eng.advance_watermark(t(11_001));
+    assert_eq!(eng.resumed(), 1);
+
+    let snap_before = eng.snapshot();
+    assert_eq!(snap_before.causes.len(), 1);
+    assert_eq!(snap_before.causes[0].confidence.value(), 35);
+
+    eng.ingest(ptb(2, 10_400, s));
+
+    let diags: Vec<_> = eng
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code() == Some("ADGL3002"))
+        .collect();
+    assert_eq!(
+        diags.len(),
+        1,
+        "if absent(...) True path must still record resolved-absent for ADGL3002, got: {:?}",
+        eng.diagnostics()
+    );
+    assert_eq!(eng.snapshot().causes[0].confidence.value(), 35);
+}
+
+#[test]
 fn offline_late_event_while_pending_is_accepted_without_3002() {
     // 08 §4: if pending is not yet resolved, late/out-of-order correlate
     // evidence just joins the ring until resume — no LateEvidence audit.

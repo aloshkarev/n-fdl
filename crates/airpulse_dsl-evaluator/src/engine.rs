@@ -417,8 +417,10 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         }
     }
 
-    /// Records absent correlate windows after an else-branch fire so later
-    /// offline late evidence can be audited (`08` §4).
+    /// Records absent correlate windows after bindings resolve so later
+    /// offline late evidence can be audited (`08` §4). Filters to
+    /// [`Binding::Absent`] only — safe for `present`/`absent` branches and
+    /// branchless rules.
     fn record_resolved_absent(
         &mut self,
         rule: &RuleInstance,
@@ -580,15 +582,15 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         *budget -= 1;
 
         let bindings = self.resolve_bindings(rule, &anchor, scope);
+        // Spec §4 keys off resolved-absent correlates (window closed), not
+        // which branch fired — record for present/absent/branchless alike.
+        self.record_resolved_absent(rule, &bindings, &anchor, scope);
         match &rule.branches {
             Some(bt) => match self.eval_pred(rule, &bt.cond, &bindings, scope) {
                 Some(T3::True) => {
                     self.exec_intents(&bt.then_body, rule, &bindings, &anchor, scope, budget);
                 }
                 Some(T3::False) => {
-                    // Window closed with correlate(s) Absent → record for
-                    // offline late-evidence audit (`08` §4 ADGL3002).
-                    self.record_resolved_absent(rule, &bindings, &anchor, scope);
                     if let Some(else_body) = &bt.else_body {
                         self.exec_intents(else_body, rule, &bindings, &anchor, scope, budget);
                     }
