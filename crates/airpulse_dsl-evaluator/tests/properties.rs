@@ -1,15 +1,21 @@
 //! Property tests per `docs/idea/spec/12-testing.md` §3: deterministic
-//! output (property 1), flat-memory GC (property 2), and the MAX_LOOKBACK
-//! no-dangling invariant at engine level (property 9). Hand-rolled
-//! deterministic pseudo-randomness — no external test deps (ADR-012 spirit).
+//! output (property 1), flat-memory GC (property 2), privacy strict mode
+//! (property 5), and the MAX_LOOKBACK no-dangling invariant at engine level
+//! (property 9). Hand-rolled deterministic pseudo-randomness — no external
+//! test deps (ADR-012 spirit).
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use airpulse_dsl_evaluator::{
-    CorrelateError, Engine, EngineDiagnostic, OfflineAuditSink, RunMode, Snapshot, StaticTopology,
-    fixtures,
+    CorrelateError, Engine, EngineDiagnostic, OfflineAuditSink, ProblemView, RunMode,
+    SarifOptions, Snapshot, StaticTopology, catalog_pii_field_names, fixtures,
+    redact_evidence_field_map, to_sarif_with_options,
 };
 use airpulse_dsl_ir::{PredOp, Predicate, ProgramImage, SlotIdx};
 use airpulse_dsl_store::{EventNode, EventProvenance, Limits, StoreDiagnostic};
-use airpulse_dsl_types::{DurationMs, EventId, EventTime, EventType, ScopeId};
+use airpulse_dsl_types::{
+    DurationMs, EventId, EventTime, EventType, ProblemKind, SarifId, ScopeId, Severity,
+};
 
 fn t(ms: i64) -> EventTime {
     EventTime::from_millis(ms)
@@ -296,4 +302,152 @@ fn predicate_overflow_surfaces_engine_diagnostic_code() {
         })
         .expect("overflow predicate should emit PredicateError");
     assert_eq!(diag.code(), Some("ADGL3007"));
+}
+
+const REDACTED: &str = "<redacted>";
+
+/// Non-PII field names mixed into generative maps (catalog + synthetic).
+const NON_PII_NAMES: &[&str] = &[
+    "segment_size",
+    "mtu",
+    "reason_code",
+    "burst_count",
+    "synthetic_metric",
+];
+
+fn cleartext_for(name: &str, nonce: u64) -> String {
+    // Unique alphanumeric sentinels so SARIF substring checks stay exact
+    // and never collide with `"<redacted>"` or JSON punctuation.
+    format!("CLEARTEXT_{name}_{nonce:x}")
+}
+
+fn snapshot_with_evidence(fields: BTreeMap<String, String>) -> Snapshot {
+    Snapshot {
+        causes: Vec::new(),
+        problems: vec![ProblemView {
+            scope: ScopeId::GLOBAL,
+            kind: ProblemKind::new("PrivacyProp"),
+            target: ScopeId::GLOBAL,
+            time: EventTime::from_millis(1),
+            severity: Severity::High,
+            sarif_id: SarifId::new("privacy_prop"),
+            cause_kinds: vec![],
+            evidence_fields: fields,
+            superseded: false,
+        }],
+        audit: Vec::new(),
+    }
+}
+
+/// 12 §3 property 5 / 10 §11 / ADR-009: under strict privacy, every
+/// catalog-marked PII field value is scrubbed from redacted evidence maps
+/// and SARIF export; non-PII cleartext is preserved.
+fn assert_strict_privacy_holds(fields: &BTreeMap<String, String>, pii: &BTreeSet<String>) {
+    let open = redact_evidence_field_map(fields, false);
+    assert_eq!(&open, fields, "non-strict mode must be identity");
+
+    let redacted = redact_evidence_field_map(fields, true);
+    assert_eq!(
+        redacted.keys().collect::<Vec<_>>(),
+        fields.keys().collect::<Vec<_>>(),
+        "redaction must preserve field names"
+    );
+
+    for (name, clear) in fields {
+        if pii.contains(name) {
+            assert_eq!(
+                redacted.get(name).map(String::as_str),
+                Some(REDACTED),
+                "strict mode must replace PII field `{name}`"
+            );
+        } else {
+            assert_eq!(
+                redacted.get(name),
+                Some(clear),
+                "strict mode must preserve non-PII field `{name}`"
+            );
+        }
+    }
+
+    for (pii_name, clear) in fields.iter().filter(|(n, _)| pii.contains(*n)) {
+        if clear == REDACTED {
+            continue;
+        }
+        for (out_name, out_val) in &redacted {
+            assert!(
+                !out_val.contains(clear.as_str()),
+                "PII cleartext for `{pii_name}` leaked into redacted field `{out_name}`"
+            );
+        }
+    }
+
+    let sarif = to_sarif_with_options(&snapshot_with_evidence(fields.clone()), SarifOptions::strict());
+    for (name, clear) in fields {
+        if pii.contains(name) {
+            if clear != REDACTED {
+                assert!(
+                    !sarif.contains(clear.as_str()),
+                    "PII cleartext for `{name}` leaked into strict SARIF"
+                );
+            }
+            assert!(
+                sarif.contains(&format!("\"{name}\":\"{REDACTED}\"")),
+                "strict SARIF must emit redacted value for `{name}`"
+            );
+        } else {
+            assert!(
+                sarif.contains(clear.as_str()),
+                "non-PII cleartext for `{name}` must survive strict SARIF"
+            );
+        }
+    }
+}
+
+#[test]
+fn privacy_strict_mode_scrubs_catalog_pii_from_evidence_and_sarif() {
+    // 12 §3 property 5: catalog `[pii]` fields resolve in the evidence map
+    // but are completely scrubbed from redacted evidence / SARIF when
+    // `strict=true` (10 §11, ADR-009).
+    let pii = catalog_pii_field_names();
+    assert!(
+        !pii.is_empty(),
+        "catalog must expose at least one [pii] field for the property"
+    );
+
+    // Exhaustive singleton coverage: every catalog PII name alone.
+    for name in &pii {
+        let mut fields = BTreeMap::new();
+        fields.insert(name.clone(), cleartext_for(name, 1));
+        assert_strict_privacy_holds(&fields, &pii);
+    }
+
+    // Exhaustive: full catalog PII set + every non-PII name together.
+    let mut all = BTreeMap::new();
+    for (i, name) in pii.iter().enumerate() {
+        all.insert(name.clone(), cleartext_for(name, 0xA000 + i as u64));
+    }
+    for (i, name) in NON_PII_NAMES.iter().enumerate() {
+        all.insert((*name).to_string(), cleartext_for(name, 0xB000 + i as u64));
+    }
+    assert_strict_privacy_holds(&all, &pii);
+
+    // Generative subsets: random mixes of PII + non-PII over many trials.
+    let pii_vec: Vec<String> = pii.iter().cloned().collect();
+    let mut rng = Rng(0xC0FF_EE00_DEAD_BEEF);
+    for trial in 0..256_u64 {
+        let mut fields = BTreeMap::new();
+        let pii_count = 1 + (rng.next() as usize % pii_vec.len());
+        for _ in 0..pii_count {
+            let idx = (rng.next() as usize) % pii_vec.len();
+            let name = &pii_vec[idx];
+            fields.insert(name.clone(), cleartext_for(name, trial ^ rng.next()));
+        }
+        let non_pii_count = rng.next() as usize % (NON_PII_NAMES.len() + 1);
+        for _ in 0..non_pii_count {
+            let idx = (rng.next() as usize) % NON_PII_NAMES.len();
+            let name = NON_PII_NAMES[idx];
+            fields.insert(name.to_string(), cleartext_for(name, trial ^ rng.next()));
+        }
+        assert_strict_privacy_holds(&fields, &pii);
+    }
 }

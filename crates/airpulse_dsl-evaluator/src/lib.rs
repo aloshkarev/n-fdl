@@ -17,7 +17,9 @@
 //!   ActionNoOpInReplay);
 //! - [`fixtures`] — hand-coded `ProgramImage`s for examples 01 and 07;
 //! - [`Snapshot`] — deterministic result extraction (ADR-012) for golden
-//!   assertions and later SARIF emission (T-08).
+//!   assertions and later SARIF emission (T-08);
+//! - [`redact_evidence_field_map`] / [`catalog_pii_field_names`] — strict-
+//!   privacy evidence scrubbing (`10` §11, ADR-009).
 //!
 //! # Spec notes / Phase 1 interpretations
 //!
@@ -57,6 +59,7 @@ pub use binding::{Binding, Bound, CauseSnapshot, ProblemSnapshot};
 pub use diag::EngineDiagnostic;
 pub use engine::Engine;
 pub use error::CorrelateError;
+pub use evidence::{catalog_pii_field_names, redact_evidence_field_map};
 pub use extract::{CauseView, ProblemView, Snapshot};
 pub use interner::{ScopeInterner, scope_key_i64};
 pub use predicate::{PredCtx, eval_predicate};
