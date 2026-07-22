@@ -37,10 +37,11 @@ protocol Bad {
   message M {
     a: u8
     b: u16;
+    c: bitfield{0};
   }
 }
 "#;
-    let (_proto, diags) = Parser::new(src).parse_protocol_with_diagnostics();
+    let (proto, diags) = Parser::new(src).parse_protocol_with_diagnostics();
     let rendered: Vec<_> = diags
         .iter()
         .filter(|d| d.severity == Severity::Error)
@@ -53,6 +54,19 @@ protocol Bad {
                 && m.contains("found:")
         }),
         "semicolon suggestion missing: {rendered:?}"
+    );
+    let names: Vec<_> = proto.messages[0]
+        .fields
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    assert!(
+        names.contains(&"a") && names.contains(&"b"),
+        "missing-`;` recovery must keep following fields: {names:?}"
+    );
+    assert!(
+        rendered.iter().any(|m| m.contains("1..=64") || m.contains("bitfield")),
+        "later bad field should still contribute a diagnostic: {rendered:?}"
     );
 }
 

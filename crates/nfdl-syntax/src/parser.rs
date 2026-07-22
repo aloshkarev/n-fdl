@@ -136,6 +136,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// True when the cursor is already on the next message-body item or closer.
+    /// Missing-`;` recovery must diagnose without resyncing past these tokens.
+    fn at_field_sync_point(&self) -> bool {
+        match &self.current {
+            Token::RBrace
+            | Token::Eof
+            | Token::Message
+            | Token::Meta
+            | Token::Validate
+            | Token::Ident(_) => true,
+            _ => false,
+        }
+    }
+
     /// Parse a protocol, collecting all statement-level syntax diagnostics.
     ///
     /// On errors inside message/protocol bodies the parser records a diagnostic,
@@ -1038,10 +1052,27 @@ impl<'a> Parser<'a> {
                 });
                 if self.current == Token::Semicolon {
                     self.advance();
-                } else if !matches!(
-                    self.current,
-                    Token::RBrace | Token::Eof | Token::Message | Token::Meta | Token::Validate
-                ) {
+                } else if self.at_field_sync_point() {
+                    // Next field / let|loop|match / `}` — diagnose without
+                    // resyncing so the following statement is still parsed.
+                    // Soft close (`}` / eof / top-level keywords): keep the
+                    // pre-existing silence for a missing final `;`.
+                    if !matches!(
+                        self.current,
+                        Token::RBrace | Token::Eof | Token::Message | Token::Meta | Token::Validate
+                    ) {
+                        let err = ParseError::Syntax(format!(
+                            "expected `;` after field (expected: `;`, found: {}); tip: terminate each field with `;`",
+                            token_label(&self.current)
+                        ));
+                        if self.recover {
+                            self.record_error(&err);
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                } else {
+                    // True junk after a field — record and skip to the next boundary.
                     if self.recover_reject(ParseError::Syntax(format!(
                         "expected `;` after field (expected: `;`, found: {}); tip: terminate each field with `;`",
                         token_label(&self.current)
