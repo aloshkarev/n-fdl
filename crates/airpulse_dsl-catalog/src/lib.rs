@@ -348,7 +348,7 @@ pub const PROBLEM_FIELD_TARGET: FieldIdx = FieldIdx(0);
 /// `p.time` field index in the catalog Problem schema (`04` §6.2).
 pub const PROBLEM_FIELD_TIME: FieldIdx = FieldIdx(1);
 
-/// Returns the canonical W0 Wi-Fi mapping table (83 rows).
+/// Returns the canonical W0 Wi-Fi mapping table (85 rows).
 #[must_use]
 pub fn wifi_w0_mappings() -> &'static [wifi::WifiMapping] {
     wifi::WIFI_MAPPINGS

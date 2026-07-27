@@ -120,6 +120,32 @@ pub(crate) fn all_causes() -> Box<[CauseSchema]> {
         cause("DhcpHighNakSignal", &[ScopeType::Global], None),
         cause("DhcpMissingOfferSignal", &[ScopeType::Global], None),
         cause("DhcpSlowLeaseSignal", &[ScopeType::Global], None),
+        // --- Cellular causes (Session scope) ---
+        cause("CellularLowCqiLossSignal", &[ScopeType::Session], None),
+        cause("CellularRsrpWeakPathSignal", &[ScopeType::Session], None),
+        cause("CellularHandoverStallSignal", &[ScopeType::Session], None),
+        cause("CellularSinrDegradedSignal", &[ScopeType::Session], None),
+        cause(
+            "CellularXlayerLowCqiLossSignal",
+            &[ScopeType::Session],
+            None,
+        ),
+        cause(
+            "CellularXlayerHandoverRttSignal",
+            &[ScopeType::Session],
+            None,
+        ),
+        cause("CellularXlayerRsrpPathSignal", &[ScopeType::Session], None),
+        // --- Ethernet causes (Session scope) ---
+        cause("EthStpChurnSignal", &[ScopeType::Session], None),
+        cause("EthArpStormSignal", &[ScopeType::Session], None),
+        cause("EthArpDupIpSignal", &[ScopeType::Session], None),
+        cause("EthVlanQinqSignal", &[ScopeType::Session], None),
+        cause("EthLldpContextSignal", &[ScopeType::Session], None),
+        cause("EthDot1xWiredSignal", &[ScopeType::Session], None),
+        // --- UDP causes (Session scope) ---
+        cause("UdpDnsTimeoutPathSignal", &[ScopeType::Session], None),
+        cause("UdpHeavyChatterSignal", &[ScopeType::Session], None),
     ]
     .into_iter()
     .chain(wifi::wifi_causes())

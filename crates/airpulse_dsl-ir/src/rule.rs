@@ -7,7 +7,7 @@ use airpulse_dsl_types::{
 };
 
 use crate::intent::Intent;
-use crate::predicate::{Predicate, TopoFuncIdx};
+use crate::predicate::{FieldIdx, Predicate, TopoFuncIdx};
 use crate::symbol::Symbol;
 
 /// Rule class: the bipartite evidence/decision split
@@ -86,9 +86,10 @@ pub struct TopoCall {
 /// (`05-verification.md` §11 `WindowProof`).
 ///
 /// `Calculable` means both window ends are linear `anchor.time ± duration`
-/// forms (`05` §3), so the engine statically knows the WaitQueue
-/// `upper_bound` (`06` §8 item 2). `RuntimeCheck` is the conservative
-/// downgrade for non-linear windows (rare in v1).
+/// forms (`05` §3). `SessionSpan` covers
+/// `[anchor.session_start_ms + start_offset, anchor.time + end_offset]` for
+/// session-scoped TCP/Wi-Fi correlation (legacy `cross_layer_window_ms`
+/// margins). `RuntimeCheck` is the conservative downgrade for other forms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WindowProof {
     /// `[anchor.time - back, anchor.time + forward]`, inclusive both ends
@@ -99,6 +100,16 @@ pub enum WindowProof {
         /// Forward extent from the anchor time (≥ 0); > 0 forces WaitQueue
         /// suspension until `watermark > upper_bound` (`03` §3.1).
         forward: DurationMs,
+    },
+    /// Session-relative window anchored on projected summary fields:
+    /// `[session_start_ms + start_offset_ms, time + end_offset_ms]`.
+    SessionSpan {
+        /// Offset applied to `session_start_ms` (typically negative, e.g. -500).
+        start_offset_ms: i64,
+        /// Offset applied to summary `time` / session end (typically +500).
+        end_offset_ms: i64,
+        /// Catalog field index for `session_start_ms` on the anchor event.
+        session_start_field: FieldIdx,
     },
     /// Window must be checked at runtime (downgrade, `05` §11).
     RuntimeCheck,
@@ -172,9 +183,26 @@ impl VerifiedAnnotations {
         let mut max_backward = DurationMs::default();
         let mut max_forward = DurationMs::default();
         for c in correlates {
-            if let WindowProof::Calculable { back, forward } = c.window {
-                max_backward = max_backward.max(back);
-                max_forward = max_forward.max(forward);
+            match c.window {
+                WindowProof::Calculable { back, forward } => {
+                    max_backward = max_backward.max(back);
+                    max_forward = max_forward.max(forward);
+                }
+                WindowProof::SessionSpan {
+                    start_offset_ms,
+                    end_offset_ms,
+                    ..
+                } => {
+                    if start_offset_ms < 0 {
+                        max_backward = max_backward
+                            .max(DurationMs::from_millis(-start_offset_ms).unwrap_or_default());
+                    }
+                    if end_offset_ms > 0 {
+                        max_forward = max_forward
+                            .max(DurationMs::from_millis(end_offset_ms).unwrap_or_default());
+                    }
+                }
+                WindowProof::RuntimeCheck => {}
             }
         }
         VerifiedAnnotations {

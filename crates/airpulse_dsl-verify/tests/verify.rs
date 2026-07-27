@@ -161,6 +161,7 @@ fn lowering_example_01_matches_key_fixture_shape() {
             assert_eq!(forward.millis(), 1000);
         }
         WindowProof::RuntimeCheck => panic!("expected calculable window"),
+        WindowProof::SessionSpan { .. } => panic!("expected calculable window"),
     }
     if let Intent::InferCause { weight, .. } = &branches.then_body[0] {
         assert_eq!(weight.value(), 85);
@@ -563,6 +564,7 @@ fn example_07_matches_fixture_shape() {
             assert_eq!(forward.millis(), 5_000);
         }
         WindowProof::RuntimeCheck => panic!("expected calculable window"),
+        WindowProof::SessionSpan { .. } => panic!("expected calculable window"),
     }
     match fixture.correlates[0].window {
         WindowProof::Calculable { back, forward } => {
@@ -570,6 +572,7 @@ fn example_07_matches_fixture_shape() {
             assert_eq!(forward.millis(), 5_000);
         }
         WindowProof::RuntimeCheck => panic!("fixture should be calculable"),
+        WindowProof::SessionSpan { .. } => panic!("fixture should be calculable"),
     }
     let branches = lowered.branches.as_ref().expect("if branch lowered");
     let then = &branches.then_body;

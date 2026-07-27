@@ -106,6 +106,11 @@ impl RingBuffer {
     ) -> impl Iterator<Item = &EventNode> {
         let lo = anchor.sub(back);
         let hi = anchor.add(fwd);
+        self.scan_range(lo, hi)
+    }
+
+    /// Iterates events with `time ∈ [lo, hi]`, inclusive both ends.
+    pub fn scan_range(&self, lo: EventTime, hi: EventTime) -> impl Iterator<Item = &EventNode> {
         let start = self.buf.partition_point(|e| e.time < lo);
         self.buf
             .iter()

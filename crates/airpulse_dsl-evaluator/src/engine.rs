@@ -620,8 +620,38 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
     ) -> Vec<Binding> {
         let mut bindings = vec![Binding::Bound(anchor.clone())];
         for spec in &rule.correlates {
-            let (back, fwd) = match spec.window {
-                WindowProof::Calculable { back, forward } => (back, forward),
+            let (lo, hi, _suspend_forward) = match spec.window {
+                WindowProof::Calculable { back, forward } => {
+                    let anchor_time = anchor.time();
+                    (anchor_time.sub(back), anchor_time.add(forward), forward)
+                }
+                WindowProof::SessionSpan {
+                    start_offset_ms,
+                    end_offset_ms,
+                    session_start_field,
+                } => {
+                    let anchor_event = match anchor {
+                        Bound::Event(e) => e,
+                        _ => {
+                            bindings.push(Binding::Absent);
+                            continue;
+                        }
+                    };
+                    let session_start = anchor_event
+                        .field(session_start_field)
+                        .unwrap_or_else(|| anchor_event.time.millis());
+                    let session_end = anchor_event.time.millis();
+                    let lo_ms = session_start.saturating_add(start_offset_ms);
+                    let hi_ms = session_end.saturating_add(end_offset_ms);
+                    let lo = EventTime::from_millis(lo_ms);
+                    let hi = EventTime::from_millis(hi_ms);
+                    let forward_ms = end_offset_ms.max(0);
+                    (
+                        lo,
+                        hi,
+                        DurationMs::from_millis(forward_ms).unwrap_or_default(),
+                    )
+                }
                 WindowProof::RuntimeCheck => {
                     self.diagnostics.push(EngineDiagnostic::RuntimeCheckWindow {
                         rule: rule.id.clone(),
@@ -630,15 +660,12 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     continue;
                 }
             };
-            let anchor_time = anchor.time();
-            let lo = anchor_time.sub(back);
-            let hi = anchor_time.add(fwd);
 
             let mut candidates: Vec<Bound> = Vec::new();
             match &spec.source {
                 CorrelateSource::Event(event_type) => {
                     if let Some(ring) = self.store.ring(scope) {
-                        for e in ring.scan_window(anchor_time, back, fwd) {
+                        for e in ring.scan_range(lo, hi) {
                             let self_match = matches!(anchor, Bound::Event(a) if a.id == e.id);
                             if &e.event_type == event_type && !self_match {
                                 candidates.push(Bound::Event(e.clone()));

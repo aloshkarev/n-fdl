@@ -149,6 +149,7 @@ fn tcp_session_summary_resolves_all_metric_fields() {
         "lost_packets",
         "packet_count",
         "session_is_ipv6",
+        "session_start_ms",
     ];
     assert_eq!(schema.fields.len(), fields.len());
     let event_type = EventType::new("tcp.session_summary");
@@ -277,18 +278,18 @@ fn resolves_protocol_per_rule_causes() {
 fn catalog_entry_counts_match_legacy_parity_contract() {
     assert_eq!(
         event_count(),
-        70,
-        "expected 44 base + 26 bounded v1.3 Wi-Fi/cross-layer events"
+        77,
+        "expected 44 base + 30 bounded v1.3 Wi-Fi/cross-layer events + 2 radio events + 1 udp summary"
     );
     assert_eq!(
         cause_count(),
-        142,
-        "expected 59 base + 83 v1.3 Wi-Fi per-rule causes"
+        159,
+        "expected 59 base + 85 v1.3 Wi-Fi per-rule causes + 7 cellular + 6 eth + 2 udp causes"
     );
     assert_eq!(
         problem_count(),
-        138,
-        "expected 55 base + 83 v1.3 Wi-Fi problems"
+        155,
+        "expected 55 base + 85 v1.3 Wi-Fi problems + 7 cellular + 6 eth + 2 udp problems"
     );
 }
 
@@ -500,10 +501,10 @@ fn protocol_summary_events_resolve_global_scope() {
 #[test]
 fn wifi_w0_catalog_bijection_and_legacy_stability() {
     let mappings = wifi_w0_mappings();
-    assert_eq!(mappings.len(), 83);
+    assert_eq!(mappings.len(), 85);
     let sarif_ids: Vec<&str> = mappings.iter().map(|m| m.sarif_id).collect();
     let unique: std::collections::BTreeSet<&str> = sarif_ids.iter().copied().collect();
-    assert_eq!(unique.len(), 83, "sarif ids must be unique");
+    assert_eq!(unique.len(), 85, "sarif ids must be unique");
 
     for row in mappings {
         let problem = resolve_problem(row.problem_kind).unwrap_or_else(|| {
@@ -570,6 +571,7 @@ fn wifi_event_vocabulary_stays_within_the_w1_budget() {
         "wifi.client.auth_outcome",
         "wifi.client.eap_outcome",
         "wifi.client.roam_outcome",
+        "wifi.client.ft_key_exchange",
         "wifi.client.dhcp_outcome",
         "wifi.client.dhcpv6_outcome",
         "wifi.client.dns_outcome",
@@ -749,6 +751,7 @@ fn w1_cross_layer_paths_resolve_with_append_only_indices() {
         ("lost_packets", 27),
         ("packet_count", 28),
         ("session_is_ipv6", 29),
+        ("session_start_ms", 30),
     ] {
         let actual = session
             .fields

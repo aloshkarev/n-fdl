@@ -178,9 +178,21 @@ pub(crate) fn all_problems() -> Box<[ProblemSchema]> {
             None,
         ),
         problem(
+            "L3DnsServfailSession",
+            &[ScopeType::Session],
+            "l3_dns_servfail_session",
+            None,
+        ),
+        problem(
             "L3DnsTlsConsistency",
             &[ScopeType::Session],
             "l3_dns_tls_consistency",
+            None,
+        ),
+        problem(
+            "L3TlsAlertBurst",
+            &[ScopeType::Session],
+            "l3_tls_alert_burst",
             None,
         ),
         problem("L3TlsHsSlow", &[ScopeType::Session], "l3_tls_hs_slow", None),
@@ -188,6 +200,12 @@ pub(crate) fn all_problems() -> Box<[ProblemSchema]> {
             "L3HttpRedirectChain",
             &[ScopeType::Session],
             "l3_http_redirect_chain",
+            None,
+        ),
+        problem(
+            "L3HttpErrorPath",
+            &[ScopeType::Session],
+            "l3_http_error_path",
             None,
         ),
         problem(
@@ -326,6 +344,79 @@ pub(crate) fn all_problems() -> Box<[ProblemSchema]> {
             "DhcpSlowLease",
             &[ScopeType::Global],
             "dhcp_slow_lease",
+            None,
+        ),
+        // --- Cellular problems (Session scope) ---
+        problem(
+            "CellularLowCqiLoss",
+            &[ScopeType::Session],
+            "cellular_low_cqi_loss",
+            None,
+        ),
+        problem(
+            "CellularRsrpWeakPath",
+            &[ScopeType::Session],
+            "cellular_rsrp_weak_path",
+            None,
+        ),
+        problem(
+            "CellularHandoverStall",
+            &[ScopeType::Session],
+            "cellular_handover_stall",
+            None,
+        ),
+        problem(
+            "CellularSinrDegraded",
+            &[ScopeType::Session],
+            "cellular_sinr_degraded",
+            None,
+        ),
+        problem(
+            "CellularXlayerLowCqiLoss",
+            &[ScopeType::Session],
+            "cellular_xlayer_low_cqi_loss",
+            None,
+        ),
+        problem(
+            "CellularXlayerHandoverRtt",
+            &[ScopeType::Session],
+            "cellular_xlayer_handover_rtt",
+            None,
+        ),
+        problem(
+            "CellularXlayerRsrpPath",
+            &[ScopeType::Session],
+            "cellular_xlayer_rsrp_path",
+            None,
+        ),
+        // --- Ethernet problems (Session scope) ---
+        problem("EthStpChurn", &[ScopeType::Session], "eth_stp_churn", None),
+        problem("EthArpStorm", &[ScopeType::Session], "eth_arp_storm", None),
+        problem("EthArpDupIp", &[ScopeType::Session], "eth_arp_dup_ip", None),
+        problem("EthVlanQinq", &[ScopeType::Session], "eth_vlan_qinq", None),
+        problem(
+            "EthLldpContext",
+            &[ScopeType::Session],
+            "eth_lldp_context",
+            None,
+        ),
+        problem(
+            "EthDot1xWired",
+            &[ScopeType::Session],
+            "eth_dot1x_wired",
+            None,
+        ),
+        // --- UDP problems (Session scope) ---
+        problem(
+            "UdpDnsTimeoutPath",
+            &[ScopeType::Session],
+            "udp_dns_timeout_path",
+            None,
+        ),
+        problem(
+            "UdpHeavyChatter",
+            &[ScopeType::Session],
+            "udp_heavy_chatter",
             None,
         ),
     ]

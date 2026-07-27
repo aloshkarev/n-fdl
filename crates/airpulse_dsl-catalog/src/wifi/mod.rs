@@ -1,12 +1,12 @@
 //! Wi-Fi catalog v1.3 — bounded raw/FSM/summary vocabulary.
 //!
-//! **Event budget (W1):** 13 raw management/control/data events, 9 FSM outcome
+//! **Event budget (W1):** 13 raw management/control/data events, 10 FSM outcome
 //! events, 2 aggregate summaries (`wifi.ap.summary`, `wifi.client.summary`),
 //! and 4 special stream events (`wifi.deauth_burst`, `wifi.rf_telemetry`,
 //! `tcp.rtt_sample`, `tcp.throughput_sample`) already present or added here.
-//! The ninth outcome,
-//! `wifi.client.twt_outcome`, exists only for the in-scope cross-layer TWT/RTO
+//! `wifi.client.twt_outcome` exists only for the in-scope cross-layer TWT/RTO
 //! correlation and is never a standalone ClientIssue.
+//! `wifi.client.ft_key_exchange` projects 802.11r FT key-exchange operands.
 
 mod events_data;
 mod mappings;

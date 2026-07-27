@@ -375,6 +375,9 @@ pub(crate) fn all_events() -> Box<[EventSchema]> {
                 int_field("lost_packets", 27),
                 int_field("packet_count", 28),
                 int_field("session_is_ipv6", 29),
+                // v1.3 (additive): session start, ms — enables session-span correlate
+                // windows `[session_start_ms - W, time + W]` without a fixed lookback.
+                int_field("session_start_ms", 30),
             ],
             &[ScopeRoute {
                 scope: ScopeType::Session,
@@ -409,6 +412,9 @@ pub(crate) fn all_events() -> Box<[EventSchema]> {
         l3_session_flag_event("ntp.udp_heavy"),
         l3_session_flag_event("lldp.seen"),
         l3_session_flag_event("tunnel.icmp_mtu"),
+        l3_session_flag_event("gtp.seen"),
+        l3_session_flag_event("diameter.seen"),
+        l3_session_flag_event("llmnr.visibility"),
         // --- Protocol summary events (Global scope) ---
         event(
             "radius.summary",
@@ -470,6 +476,55 @@ pub(crate) fn all_events() -> Box<[EventSchema]> {
             ],
             &[ScopeRoute {
                 scope: ScopeType::Global,
+                path: "target",
+            }],
+        ),
+        // --- Cellular radio events (Session scope) ---
+        event(
+            "radio.session_summary",
+            &[
+                session_target(),
+                int_field("time", 1),
+                int_field("session_start_ms", 2),
+                int_field("sample_count", 3),
+                int_field("cqi_mean", 4),
+                int_field("bler_pm", 5),
+                int_field("rsrp_dbm_mean", 6),
+                int_field("rsrq_db_mean", 7),
+                int_field("sinr_db_mean", 8),
+                int_field("pci_change_count", 9),
+                int_field("low_cqi_fraction_pm", 10),
+            ],
+            &[ScopeRoute {
+                scope: ScopeType::Session,
+                path: "target",
+            }],
+        ),
+        event(
+            "radio.handover",
+            &[
+                session_target(),
+                int_field("time", 1),
+                int_field("pci_before", 2),
+                int_field("pci_after", 3),
+            ],
+            &[ScopeRoute {
+                scope: ScopeType::Session,
+                path: "target",
+            }],
+        ),
+        event(
+            "udp.summary",
+            &[
+                session_target(),
+                int_field("time", 1),
+                int_field("session_start_ms", 2),
+                int_field("datagrams", 3),
+                int_field("dns_query_count", 4),
+                int_field("dns_timeout_count", 5),
+            ],
+            &[ScopeRoute {
+                scope: ScopeType::Session,
                 path: "target",
             }],
         ),

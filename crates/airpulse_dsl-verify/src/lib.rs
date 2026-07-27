@@ -12,8 +12,8 @@ use airpulse_dsl_catalog::{
 };
 use airpulse_dsl_ir::{
     AnchorSource, AnchorSpec, BranchTable, CorrelateSource, CorrelateSpec, ExclusivityGroup,
-    Intent, PredOp, Predicate, ProgramImage, ProvKey, RuleInstance, RuleKind, Symbol, TopoCall,
-    VerifiedAnnotations, WindowProof,
+    FieldIdx, Intent, PredOp, Predicate, ProgramImage, ProvKey, RuleInstance, RuleKind, Symbol,
+    TopoCall, VerifiedAnnotations, WindowProof,
 };
 use airpulse_dsl_syntax::ast::{
     ActionField, ActionName, ActionStmt, BinaryOp, CorrelateBlock,
@@ -696,12 +696,29 @@ fn phase06_temporal(ruleset: &Ruleset<'_>, config: VerifyConfig, diags: &mut Dia
                         );
                     }
                 }
-                None => err(
-                    diags,
-                    "ADGL0411",
-                    "non calculable window expression",
-                    c.time.span,
-                ),
+                None => {
+                    if let Some((start_off, end_off)) =
+                        session_span_window(anchor_binding, &c.time.start, &c.time.end)
+                    {
+                        if start_off.unsigned_abs() > allowed_window_ms as u64
+                            || end_off > allowed_window_ms
+                        {
+                            err(
+                                diags,
+                                "ADGL0412",
+                                "session span margin exceeds MAX_LOOKBACK",
+                                c.time.span,
+                            );
+                        }
+                    } else {
+                        err(
+                            diags,
+                            "ADGL0411",
+                            "non calculable window expression",
+                            c.time.span,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1112,6 +1129,9 @@ fn lower_rule(
         .iter()
         .filter_map(|c| match c.window {
             WindowProof::Calculable { back, .. } => Some(back),
+            WindowProof::SessionSpan {
+                start_offset_ms, ..
+            } => DurationMs::from_millis(start_offset_ms.unsigned_abs() as i64),
             WindowProof::RuntimeCheck => None,
         })
         .max()
@@ -1120,6 +1140,9 @@ fn lower_rule(
         .iter()
         .filter_map(|c| match c.window {
             WindowProof::Calculable { forward, .. } => Some(forward),
+            WindowProof::SessionSpan { end_offset_ms, .. } => {
+                DurationMs::from_millis(end_offset_ms.max(0))
+            }
             WindowProof::RuntimeCheck => None,
         })
         .max()
@@ -1194,7 +1217,7 @@ fn lower_rule(
 
 fn lower_correlate(
     c: &CorrelateBlock<'_>,
-    _env: &RuleEnv,
+    env: &RuleEnv,
     anchor_binding: &str,
     diags: &mut DiagBuffer,
 ) -> Option<CorrelateSpec> {
@@ -1226,6 +1249,16 @@ fn lower_correlate(
         let back = DurationMs::from_millis(back).unwrap_or_default();
         let forward = DurationMs::from_millis(forward).unwrap_or_default();
         WindowProof::Calculable { back, forward }
+    } else if let Some((start_offset_ms, end_offset_ms)) =
+        session_span_window(anchor_binding, &c.time.start, &c.time.end)
+    {
+        let session_start_field =
+            resolve_session_start_field(env, anchor_binding, diags, c.time.span)?;
+        WindowProof::SessionSpan {
+            start_offset_ms,
+            end_offset_ms,
+            session_start_field,
+        }
     } else {
         WindowProof::RuntimeCheck
     };
@@ -2155,6 +2188,86 @@ fn calculable_window(anchor_binding: &str, start: &Expr<'_>, end: &Expr<'_>) -> 
     Some((-back, forward))
 }
 
+/// `[anchor.session_start_ms ± D_start, anchor.time ± D_end]` session span.
+fn session_span_window(
+    anchor_binding: &str,
+    start: &Expr<'_>,
+    end: &Expr<'_>,
+) -> Option<(i64, i64)> {
+    let (start_field, start_off) = as_anchor_field_offset(anchor_binding, start)?;
+    let (end_field, end_off) = as_anchor_field_offset(anchor_binding, end)?;
+    if start_field == "session_start_ms" && end_field == "time" {
+        Some((start_off, end_off))
+    } else {
+        None
+    }
+}
+
+fn anchor_field_name(field: &str) -> Option<&'static str> {
+    match field {
+        "time" => Some("time"),
+        "session_start_ms" => Some("session_start_ms"),
+        _ => None,
+    }
+}
+
+fn as_anchor_field_offset(anchor_binding: &str, expr: &Expr<'_>) -> Option<(&'static str, i64)> {
+    match &expr.kind {
+        ExprKind::Field { base, field } => {
+            if let ExprKind::Ident(id) = &base.kind
+                && id.name == anchor_binding
+            {
+                let name = anchor_field_name(field.name)?;
+                return Some((name, 0));
+            }
+            None
+        }
+        ExprKind::Binary { op, left, right } => {
+            if let ExprKind::Field { base, field } = &left.kind
+                && let ExprKind::Ident(id) = &base.kind
+                && id.name == anchor_binding
+                && let ExprKind::Duration(d) = &right.kind
+            {
+                let ms = d.millis;
+                let name = anchor_field_name(field.name)?;
+                return Some((name, if *op == BinaryOp::Sub { -ms } else { ms }));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn resolve_session_start_field(
+    env: &RuleEnv,
+    anchor_binding: &str,
+    diags: &mut DiagBuffer,
+    span: Span,
+) -> Option<FieldIdx> {
+    let BindingTy::Event(event_ty) = env.bindings.get(anchor_binding)? else {
+        err(
+            diags,
+            "ADGL0414",
+            "session span windows require an event anchor",
+            span,
+        );
+        return None;
+    };
+    let path = resolve_metric_path(EventOrBindingType::Event(event_ty), "session_start_ms");
+    match path {
+        Some((idx, _)) => Some(idx),
+        None => {
+            err(
+                diags,
+                "ADGL0415",
+                "anchor event lacks session_start_ms for session span window",
+                span,
+            );
+            None
+        }
+    }
+}
+
 fn ruleset_max_forward_window_ms(ruleset: &Ruleset<'_>) -> i64 {
     let mut max_forward = 0i64;
     for rule in &ruleset.rules {
@@ -2174,6 +2287,10 @@ fn ruleset_max_forward_window_ms(ruleset: &Ruleset<'_>) -> i64 {
                 calculable_window(anchor_binding, &correlate.time.start, &correlate.time.end)
             {
                 max_forward = max_forward.max(forward);
+            } else if let Some((_, end_off)) =
+                session_span_window(anchor_binding, &correlate.time.start, &correlate.time.end)
+            {
+                max_forward = max_forward.max(end_off.max(0));
             }
         }
     }
