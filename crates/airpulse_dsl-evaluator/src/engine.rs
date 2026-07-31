@@ -439,6 +439,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             };
             let (back, fwd) = match spec.window {
                 WindowProof::Calculable { back, forward } => (back, forward),
+                WindowProof::SessionSpan { .. } => continue,
                 WindowProof::RuntimeCheck => continue,
             };
             self.resolved_absent.push(ResolvedAbsent {
