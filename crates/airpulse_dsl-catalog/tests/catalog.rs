@@ -288,8 +288,8 @@ fn catalog_entry_counts_match_legacy_parity_contract() {
     );
     assert_eq!(
         problem_count(),
-        155,
-        "expected 55 base + 85 v1.3 Wi-Fi problems + 7 cellular + 6 eth + 2 udp problems"
+        158,
+        "expected 58 base + 85 v1.3 Wi-Fi problems + 7 cellular + 6 eth + 2 udp problems"
     );
 }
 
@@ -603,7 +603,7 @@ fn wifi_event_vocabulary_stays_within_the_w1_budget() {
         .collect();
 
     assert_eq!(raw.len(), 13);
-    assert_eq!(outcomes.len(), 9);
+    assert_eq!(outcomes.len(), 10);
     assert_eq!(summaries.len(), 2);
     assert_eq!(specials.len(), 4);
     assert_eq!(actual, approved, "unapproved Wi-Fi vocabulary entry");
@@ -768,7 +768,7 @@ fn w1_cross_layer_paths_resolve_with_append_only_indices() {
     let ap = resolve_event("wifi.ap.summary").expect("AP summary");
     assert_eq!(
         ap.fields.last().expect("AP fields").name,
-        "unencrypted_traffic_leak"
+        "peak_rts_max_gap_ms"
     );
     let client = resolve_event("wifi.client.summary").expect("client summary");
     assert_eq!(
