@@ -3,13 +3,17 @@
 //! §2 ("EventNode stored in RingBuffer (owned, evictable)").
 
 use airpulse_dsl_ir::FieldIdx;
-use airpulse_dsl_types::{EventId, EventTime, EventType, ScopeId};
+use airpulse_dsl_types::{
+    BoundedList, EventId, EventTime, EventType, ListCoverage, ListKind, MAX_CATALOG_LIST_VALUES,
+    ScopeId,
+};
 
 /// Maximum values carried by one event `IntList` field.
 ///
 /// Input is sorted and deduplicated before this bound is applied, so truncation
-/// is deterministic and retains the lowest 64 encoded values.
-pub const MAX_EVENT_INT_LIST_VALUES: usize = 64;
+/// is deterministic and retains the lowest values. A longer input is
+/// [`ListCoverage::Partial`] and names the `IntList` cap.
+pub const MAX_EVENT_INT_LIST_VALUES: usize = MAX_CATALOG_LIST_VALUES;
 
 /// Provenance basics for an event — where in the capture/stream it came from
 /// (the `span` component of `04` §3 `EventNode`; used for SARIF evidence
@@ -49,6 +53,8 @@ pub struct EventNode {
     /// Bounded typed `IntList` sidecar, sorted by field index. Scalar
     /// predicates continue to address only [`Self::fields`].
     int_list_fields: Box<[(FieldIdx, Box<[i64]>)]>,
+    /// Coverage of each `IntList` sidecar, sorted by the same field index.
+    int_list_coverage: Box<[(FieldIdx, ListCoverage)]>,
     /// Capture provenance (`04` §3 `span`).
     pub provenance: EventProvenance,
 }
@@ -74,6 +80,7 @@ impl EventNode {
             scope,
             fields: fields.into_boxed_slice(),
             int_list_fields: Box::new([]),
+            int_list_coverage: Box::new([]),
             provenance,
         }
     }
@@ -81,19 +88,26 @@ impl EventNode {
     /// Adds or replaces one bounded `IntList` field.
     ///
     /// Values are sorted, deduplicated, and deterministically truncated to
-    /// [`MAX_EVENT_INT_LIST_VALUES`].
+    /// [`MAX_EVENT_INT_LIST_VALUES`]. A truncated field records
+    /// [`ListCoverage::Partial`] with the `IntList` cap name.
     #[must_use]
-    pub fn with_int_list_field(mut self, idx: FieldIdx, mut values: Vec<i64>) -> EventNode {
-        values.sort_unstable();
-        values.dedup();
-        values.truncate(MAX_EVENT_INT_LIST_VALUES);
+    pub fn with_int_list_field(mut self, idx: FieldIdx, values: Vec<i64>) -> EventNode {
+        let bounded = BoundedList::from_sorted_dedup(ListKind::IntList, values);
+        let (values, coverage) = bounded.into_parts();
 
         let mut fields = self.int_list_fields.into_vec();
         match fields.binary_search_by_key(&idx, |(field_idx, _)| *field_idx) {
-            Ok(position) => fields[position] = (idx, values.into_boxed_slice()),
-            Err(position) => fields.insert(position, (idx, values.into_boxed_slice())),
+            Ok(position) => fields[position] = (idx, values),
+            Err(position) => fields.insert(position, (idx, values)),
         }
         self.int_list_fields = fields.into_boxed_slice();
+
+        let mut coverages = self.int_list_coverage.into_vec();
+        match coverages.binary_search_by_key(&idx, |(field_idx, _)| *field_idx) {
+            Ok(position) => coverages[position] = (idx, coverage),
+            Err(position) => coverages.insert(position, (idx, coverage)),
+        }
+        self.int_list_coverage = coverages.into_boxed_slice();
         self
     }
 
@@ -128,5 +142,14 @@ impl EventNode {
     #[must_use]
     pub fn int_list_fields(&self) -> &[(FieldIdx, Box<[i64]>)] {
         &self.int_list_fields
+    }
+
+    /// Coverage of one `IntList` field. `None` when that field was not set.
+    #[must_use]
+    pub fn int_list_coverage(&self, idx: FieldIdx) -> Option<&ListCoverage> {
+        self.int_list_coverage
+            .binary_search_by_key(&idx, |(field_idx, _)| *field_idx)
+            .ok()
+            .map(|position| &self.int_list_coverage[position].1)
     }
 }

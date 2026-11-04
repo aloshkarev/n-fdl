@@ -411,11 +411,27 @@ pub fn resolve_problem(name: &str) -> Option<&'static ProblemSchema> {
 }
 
 /// Resolve a problem schema by default SARIF id (`10-catalog-abi.md` §4).
+///
+/// This returns the first row. `l3_stp_spanning_tree` and `l3_dot1x_wired`
+/// each have a Vlan row and a later Session row. Use
+/// [`resolve_problem_by_sarif_in_scope`] when the scope is known.
 #[must_use]
 pub fn resolve_problem_by_sarif(sarif_id: &str) -> Option<&'static ProblemSchema> {
     PROBLEMS
         .iter()
         .find(|schema| schema.default_sarif_id.as_str() == sarif_id)
+}
+
+/// Resolve the problem row whose SARIF id matches and whose `valid_scopes`
+/// contain `scope`.
+#[must_use]
+pub fn resolve_problem_by_sarif_in_scope(
+    sarif_id: &str,
+    scope: ScopeType,
+) -> Option<&'static ProblemSchema> {
+    PROBLEMS.iter().find(|schema| {
+        schema.default_sarif_id.as_str() == sarif_id && schema.valid_scopes.contains(&scope)
+    })
 }
 
 /// Resolve an action schema by DSL keyword (`10-catalog-abi.md` §5).

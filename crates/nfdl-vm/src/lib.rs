@@ -17,6 +17,26 @@ pub struct ParserContext {
     pub loop_count: usize,
 }
 
+/// Packet-byte coverage from one `execute_datagram` call.
+///
+/// This is not a catalog cause. `Ok(())` is not a decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatagramCoverage {
+    /// The call had no bytes to decode.
+    Absent,
+    /// A cap was hit. `cap` names it. `kept` and `dropped` are message counts.
+    Partial {
+        /// Cap name, such as `short-read` or `max_layer_depth`.
+        cap: &'static str,
+        /// Messages walked before the cap.
+        kept: usize,
+        /// Messages not walked.
+        dropped: usize,
+    },
+    /// Every message was walked and the buffer was not short.
+    Complete,
+}
+
 /// Errors produced by the high-level datagram VM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmError {
@@ -48,24 +68,40 @@ impl VmState {
         }
     }
 
-    /// Execute datagram spec (minimal)
-    pub fn execute_datagram(&mut self, spec: &Protocol) -> Result<(), VmError> {
+    /// Walk `spec` against `bytes`.
+    ///
+    /// Depth resets on every call. Empty `bytes` is [`DatagramCoverage::Absent`].
+    /// A buffer that runs out before the messages do is `short-read`. Depth
+    /// past 16 is `max_layer_depth`. Neither result is a cause.
+    pub fn execute_datagram(&mut self, spec: &Protocol, bytes: &[u8]) -> DatagramCoverage {
         const MAX_LAYER_DEPTH: usize = 16;
-        const MAX_LOOP_ITERATIONS: usize = 10_000;
-
-        // Simulate execution of messages
-        for _ in &spec.messages {
+        self.ctx.depth = 0;
+        self.ctx.loop_count = 0;
+        if bytes.is_empty() {
+            return DatagramCoverage::Absent;
+        }
+        let mut offset = 0usize;
+        let mut kept = 0usize;
+        for (index, _message) in spec.messages.iter().enumerate() {
             self.ctx.depth += 1;
             if self.ctx.depth > MAX_LAYER_DEPTH {
-                return Err(VmError::LimitExceeded("max_layer_depth".into()));
+                return DatagramCoverage::Partial {
+                    cap: "max_layer_depth",
+                    kept,
+                    dropped: spec.messages.len() - kept,
+                };
             }
+            if offset >= bytes.len() {
+                return DatagramCoverage::Partial {
+                    cap: "short-read",
+                    kept,
+                    dropped: spec.messages.len() - index,
+                };
+            }
+            offset += 1;
+            kept += 1;
         }
-
-        if self.ctx.loop_count > MAX_LOOP_ITERATIONS {
-            return Err(VmError::LimitExceeded("max_loop_iterations".into()));
-        }
-
-        Ok(())
+        DatagramCoverage::Complete
     }
 }
 
@@ -99,20 +135,56 @@ mod tests {
     }
 
     #[test]
-    fn execute_datagram_ok_for_shallow_protocol() {
+    fn execute_datagram_complete_for_shallow_protocol() {
         let mut vm = VmState::new();
         let proto = empty_proto("T", 3);
-        assert!(vm.execute_datagram(&proto).is_ok());
+        assert_eq!(
+            vm.execute_datagram(&proto, &[1, 2, 3]),
+            DatagramCoverage::Complete
+        );
         assert_eq!(vm.ctx.depth, 3);
+        assert_eq!(
+            vm.execute_datagram(&proto, &[1, 2, 3]),
+            DatagramCoverage::Complete,
+            "depth resets per call"
+        );
+        assert_eq!(vm.ctx.depth, 3);
+    }
+
+    #[test]
+    fn empty_bytes_are_absent() {
+        let mut vm = VmState::new();
+        let proto = empty_proto("T", 3);
+        assert_eq!(vm.execute_datagram(&proto, &[]), DatagramCoverage::Absent);
+        assert_eq!(vm.ctx.depth, 0);
+    }
+
+    #[test]
+    fn short_read_is_partial_not_a_zero_cause() {
+        let mut vm = VmState::new();
+        let proto = empty_proto("T", 3);
+        assert_eq!(
+            vm.execute_datagram(&proto, &[1]),
+            DatagramCoverage::Partial {
+                cap: "short-read",
+                kept: 1,
+                dropped: 2,
+            }
+        );
     }
 
     #[test]
     fn execute_datagram_hits_layer_depth_limit() {
         let mut vm = VmState::new();
         let proto = empty_proto("Deep", 17);
-        match vm.execute_datagram(&proto) {
-            Err(VmError::LimitExceeded(msg)) => assert_eq!(msg, "max_layer_depth"),
-            other => panic!("expected LimitExceeded, got {other:?}"),
-        }
+        let bytes = vec![1u8; 32];
+        assert_eq!(
+            vm.execute_datagram(&proto, &bytes),
+            DatagramCoverage::Partial {
+                cap: "max_layer_depth",
+                kept: 16,
+                dropped: 1,
+            }
+        );
     }
 }

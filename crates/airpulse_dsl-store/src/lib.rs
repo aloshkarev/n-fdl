@@ -33,6 +33,7 @@ mod store;
 mod subgraph;
 mod waitqueue;
 
+pub use airpulse_dsl_types::ListCoverage;
 pub use diag::StoreDiagnostic;
 pub use event::{EventNode, EventProvenance, MAX_EVENT_INT_LIST_VALUES};
 pub use limits::Limits;

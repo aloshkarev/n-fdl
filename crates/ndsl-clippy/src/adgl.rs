@@ -20,6 +20,8 @@ pub const ADGLS_FLOAT_LITERAL: LintId = LintId::new("ADGLS0100");
 pub const ADGLS_EMPTY_HAVING: LintId = LintId::new("ADGLS0200");
 /// Absence-named signal without explicit `present`/`absent` correlate idiom.
 pub const ADGLS_ABSENCE_IDIOM: LintId = LintId::new("ADGLS0300");
+/// A `present`/`absent` guard whose correlate is missing from that infer's evidence.
+pub const ADGLS_GUARDED_EVIDENCE: LintId = LintId::new("ADGLS0400");
 
 pub fn register_adgl_pack(store: &mut LintStore) {
     store.register(
@@ -53,6 +55,14 @@ pub fn register_adgl_pack(store: &mut LintStore) {
             description: "absence-named signal without present/absent correlate idiom",
         },
         check_absence_idiom as LintCheck,
+    );
+    store.register(
+        LintDef {
+            id: ADGLS_GUARDED_EVIDENCE,
+            default_level: LintLevel::Warn,
+            description: "present/absent correlate must appear in that infer's evidence",
+        },
+        check_guarded_evidence as LintCheck,
     );
 }
 
@@ -297,6 +307,90 @@ fn check_empty_having(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
 /// Heuristic only — no IR/counterfactual sugar. Skips rules with zero correlates
 /// (counter-gap / metric / completeness / pure Cause→Problem verdicts) and rules
 /// that already use `present(...)` or `absent(...)`.
+fn check_guarded_evidence(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
+    let Some(rs) = ruleset(ctx) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for rule in &rs.rules {
+        let RuleDecl::Evidence(ev) = rule else {
+            continue;
+        };
+        if let Some(ie) = &ev.if_else {
+            let guards = guard_names(&ie.condition);
+            if guards.is_empty() {
+                continue;
+            }
+            require_guards_in_infers(&ie.then_body, &guards, &mut out);
+            if let Some(else_body) = &ie.else_body {
+                require_guards_in_infers(else_body, &guards, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn guard_names<'a>(expr: &'a Expr<'a>) -> Vec<&'a str> {
+    let mut names = Vec::new();
+    collect_guard_names(expr, &mut names);
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+fn collect_guard_names<'a>(expr: &'a Expr<'a>, names: &mut Vec<&'a str>) {
+    match &expr.kind {
+        ExprKind::Present(id) | ExprKind::Absent(id) => names.push(id.name),
+        ExprKind::Unary { expr, .. } => collect_guard_names(expr, names),
+        ExprKind::Binary { left, right, .. } => {
+            collect_guard_names(left, names);
+            collect_guard_names(right, names);
+        }
+        ExprKind::Field { base, .. } => collect_guard_names(base, names),
+        ExprKind::Call { callee, args } => {
+            collect_guard_names(callee, names);
+            for arg in args {
+                collect_guard_names(arg, names);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            collect_guard_names(base, names);
+            collect_guard_names(index, names);
+        }
+        _ => {}
+    }
+}
+
+fn require_guards_in_infers(stmts: &[Stmt<'_>], guards: &[&str], out: &mut Vec<LintDiagnostic>) {
+    for stmt in stmts {
+        let Stmt::Infer(infer) = stmt else {
+            continue;
+        };
+        let listed: HashSet<&str> = infer
+            .fields
+            .iter()
+            .find_map(|field| match field {
+                InferField::Evidence(ids, _) => {
+                    Some(ids.iter().map(|id| id.name).collect::<HashSet<_>>())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        for name in guards {
+            if !listed.contains(name) {
+                out.push(LintDiagnostic::new(
+                    ADGLS_GUARDED_EVIDENCE,
+                    LintLevel::Warn,
+                    format!(
+                        "correlate `{name}` is guarded by present/absent but missing from this infer's evidence"
+                    ),
+                    infer.span,
+                ));
+            }
+        }
+    }
+}
+
 fn check_absence_idiom(ctx: &LintContext<'_>) -> Vec<LintDiagnostic> {
     let Some(rs) = ruleset(ctx) else {
         return Vec::new();
@@ -1152,6 +1246,58 @@ ruleset "t" {
             pack.iter()
                 .map(|d| (&d.diagnostic.id, &d.diagnostic.message))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn guarded_correlate_must_be_named_in_that_infer() {
+        let missing = minimal_ruleset(
+            r#"
+    evidence e {
+        scope: Session
+        anchor a: event(tcp.retransmission_burst) { a.segment_size > 1400 }
+        correlate ptb: event(icmp.ptb) {
+            topo: same_session(a.target, ptb.target)
+            time: ptb.time in [a.time - 500ms, a.time + 1s]
+        }
+        if present(ptb) {
+            infer Cause(PmtudBlackhole) { target: a.target, weight: +85, evidence: [a] }
+        } else {
+            infer Cause(PmtudBlackhole) { target: a.target, weight: +35, evidence: [a, ptb] }
+        }
+    }
+"#,
+        );
+        let diags = lint(&missing);
+        let hits: Vec<_> = diags
+            .iter()
+            .filter(|d| d.diagnostic.id == ADGLS_GUARDED_EVIDENCE)
+            .collect();
+        assert_eq!(hits.len(), 1, "only the then-branch omits ptb: {diags:?}");
+
+        let named = minimal_ruleset(
+            r#"
+    evidence e {
+        scope: Session
+        anchor a: event(tcp.retransmission_burst) { a.segment_size > 1400 }
+        correlate ptb: event(icmp.ptb) {
+            topo: same_session(a.target, ptb.target)
+            time: ptb.time in [a.time - 500ms, a.time + 1s]
+        }
+        if present(ptb) {
+            infer Cause(PmtudBlackhole) { target: a.target, weight: +85, evidence: [a, ptb] }
+        } else {
+            infer Cause(PmtudBlackhole) { target: a.target, weight: +35, evidence: [a, ptb] }
+        }
+    }
+"#,
+        );
+        let diags = lint(&named);
+        assert!(
+            !diags
+                .iter()
+                .any(|d| d.diagnostic.id == ADGLS_GUARDED_EVIDENCE),
+            "named evidence must not warn: {diags:?}"
         );
     }
 }

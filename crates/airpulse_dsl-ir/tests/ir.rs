@@ -90,6 +90,10 @@ fn pmtud_hypothesis() -> RuleInstance {
             target: MetricPath::new("rtx.target"),
             weight: Weight::new(85).expect("weight in domain"),
             evidence: Box::new([Symbol::new("rtx"), Symbol::new("ptb")]),
+            evidence_state: Box::new([
+                airpulse_dsl_types::EvidenceState::Present,
+                airpulse_dsl_types::EvidenceState::Present,
+            ]),
             provenance_key: prov.clone(),
             evidence_pii: Box::new([]),
         }]),
@@ -99,6 +103,7 @@ fn pmtud_hypothesis() -> RuleInstance {
                 target: MetricPath::new("rtx.target"),
                 weight: Weight::new(35).expect("weight in domain"),
                 evidence: Box::new([Symbol::new("rtx")]),
+                evidence_state: Box::new([airpulse_dsl_types::EvidenceState::Absent]),
                 provenance_key: prov,
                 evidence_pii: Box::new([]),
             },
@@ -507,4 +512,42 @@ fn rule8_suppress_downstream_shape_is_expressible() {
         &then_body[0],
         Intent::SupersedeProblem { target, .. } if target.as_str() == "downstream.target"
     ));
+}
+
+#[test]
+fn rule_index_does_not_alias_past_u32() {
+    assert_eq!(
+        ProgramImage::rule_index_slot(u32::MAX as usize),
+        Ok(u32::MAX)
+    );
+    assert_eq!(
+        ProgramImage::rule_index_slot((u32::MAX as usize).saturating_add(1)),
+        Err("rule-index")
+    );
+}
+
+#[test]
+fn missing_correlate_does_not_share_a_dedup_key() {
+    use airpulse_dsl_types::EvidenceState;
+    let present = ProvKey::derive(
+        RuleId::new("pmtud"),
+        CauseKind::new("PmtudBlackhole"),
+        "session",
+        "rtx.target",
+        &[
+            ("rtx", EvidenceState::Present),
+            ("ptb", EvidenceState::Present),
+        ],
+    );
+    let absent = ProvKey::derive(
+        RuleId::new("pmtud"),
+        CauseKind::new("PmtudBlackhole"),
+        "session",
+        "rtx.target",
+        &[
+            ("rtx", EvidenceState::Present),
+            ("ptb", EvidenceState::Absent),
+        ],
+    );
+    assert_ne!(present, absent);
 }

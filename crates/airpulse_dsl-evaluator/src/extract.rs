@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use airpulse_dsl_types::{
-    CauseKind, Confidence, EventTime, ProblemKind, SarifId, ScopeId, Severity,
+    CauseKind, Confidence, EventTime, EvidenceState, ProblemKind, SarifId, ScopeId, Severity,
 };
 
 use crate::sink::AuditEntry;
@@ -23,6 +23,12 @@ pub struct CauseView {
     pub time: EventTime,
     /// Final confidence.
     pub confidence: Confidence,
+    /// Tagged evidence refs copied from the cause node, including absent refs.
+    /// Empty is not a published cause; a view with an empty list is coverage
+    /// `absent`.
+    pub evidence_refs: Vec<(Box<str>, EvidenceState)>,
+    /// Published id: `kind@scopeType:scopeHash:targetType:targetHash`.
+    pub published_id: String,
 }
 
 /// One emitted problem with its suppression flag.

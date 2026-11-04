@@ -10,7 +10,9 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+mod bounded_list;
 mod catalog;
+mod cause;
 mod confidence;
 mod ids;
 mod scope;
@@ -19,7 +21,12 @@ mod t3;
 mod time;
 mod value_encoding;
 
+pub use bounded_list::{
+    BoundedList, ListCoverage, ListKind, MAX_CATALOG_LIST_VALUES, bound_int_list,
+    bound_node_id_list, bound_scope_id_list,
+};
 pub use catalog::{ActionKind, Capability, CauseKind, EventType, MetricPath, ProblemKind, SarifId};
+pub use cause::{Cause, CauseError, CauseEvidence, EvidenceState};
 pub use confidence::{Confidence, Weight};
 pub use ids::{EventId, NodeId, RuleId};
 pub use scope::{ScopeId, ScopeType};

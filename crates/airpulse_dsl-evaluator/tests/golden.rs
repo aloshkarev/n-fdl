@@ -282,9 +282,14 @@ fn g05_upstream_failure_supersedes_downstream_problem() {
     eng.finish();
 
     let snap = eng.snapshot();
-    // Stub path: two DeviceDown causes at +100.
+    // Stub path: two PhysicalLinkAbsent causes at +100. The catalog row is
+    // Port-scoped, and the router targets are ports.
     assert_eq!(snap.causes.len(), 2);
-    assert!(snap.causes.iter().all(|c| c.kind.as_str() == "DeviceDown"));
+    assert!(
+        snap.causes
+            .iter()
+            .all(|c| c.kind.as_str() == "PhysicalLinkAbsent")
+    );
     assert!(snap.causes.iter().all(|c| c.confidence.value() == 100));
 
     // Two problems; only the downstream one (r2) superseded.

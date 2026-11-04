@@ -33,6 +33,14 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Maximum include nesting. A deeper edge is a partial load, not a discarded entry.
+pub const MAX_INCLUDE_DEPTH: usize = 32;
+/// Maximum distinct files in one include closure.
+pub const MAX_INCLUDE_FILES: usize = 64;
+/// Maximum bytes read across the include closure. The 4 MiB tokenize cap does
+/// not cover this closure by itself.
+pub const MAX_INCLUDE_BYTES: usize = 4 * 1024 * 1024;
+
 /// Owned ADGL source after `include` expansion.
 #[derive(Debug, Clone)]
 pub struct LoadedRuleset {
@@ -42,6 +50,9 @@ pub struct LoadedRuleset {
     pub files: Vec<PathBuf>,
     /// Single composed ADGL source (no `include` lines).
     pub source: String,
+    /// Diagnostics for includes that failed. The entry's own rules stay in
+    /// [`Self::source`] when a child file fails.
+    pub diagnostics: DiagBuffer,
 }
 
 impl LoadedRuleset {
@@ -59,13 +70,25 @@ pub fn load_ruleset(path: impl AsRef<Path>) -> Result<LoadedRuleset, DiagBuffer>
     let mut stack = Vec::new();
     let mut files = Vec::new();
     let mut expanded_once = HashSet::new();
-    let expanded = expand_file(path, &mut stack, &mut files, &mut expanded_once)?;
+    let mut budget = IncludeBudget { bytes: 0 };
+    let (expanded, diagnostics) = expand_file(
+        path,
+        &mut stack,
+        &mut files,
+        &mut expanded_once,
+        &mut budget,
+    )?;
     let source = compose_entry(&expanded.body, &expanded.imported_rules_text)?;
     Ok(LoadedRuleset {
         entry: files.first().cloned().unwrap_or_else(|| path.to_path_buf()),
         files,
         source,
+        diagnostics,
     })
+}
+
+struct IncludeBudget {
+    bytes: usize,
 }
 
 struct ExpandedFile {
@@ -82,8 +105,9 @@ fn expand_file(
     stack: &mut Vec<PathBuf>,
     files: &mut Vec<PathBuf>,
     expanded_once: &mut HashSet<PathBuf>,
-) -> Result<ExpandedFile, DiagBuffer> {
-    expand_file_from_include(path, &Span::unknown(), stack, files, expanded_once)
+    budget: &mut IncludeBudget,
+) -> Result<(ExpandedFile, DiagBuffer), DiagBuffer> {
+    expand_file_from_include(path, &Span::unknown(), stack, files, expanded_once, budget)
 }
 
 fn expand_file_from_include(
@@ -92,7 +116,9 @@ fn expand_file_from_include(
     stack: &mut Vec<PathBuf>,
     files: &mut Vec<PathBuf>,
     expanded_once: &mut HashSet<PathBuf>,
-) -> Result<ExpandedFile, DiagBuffer> {
+    budget: &mut IncludeBudget,
+) -> Result<(ExpandedFile, DiagBuffer), DiagBuffer> {
+    let mut diags = DiagBuffer::new();
     let canon = canonicalize_existing(path, *include_span)?;
     if let Some(cycle_from) = stack.iter().position(|p| p == &canon) {
         return Err(cycle_diagnostic(stack, cycle_from, &canon));
@@ -100,48 +126,119 @@ fn expand_file_from_include(
 
     // Diamond / multi-parent: expand each canonical path once; do not re-emit rules.
     if expanded_once.contains(&canon) {
-        return Ok(ExpandedFile {
-            body: String::new(),
-            imported_rules_text: String::new(),
-            emit_own_rules: false,
-        });
+        return Ok((
+            ExpandedFile {
+                body: String::new(),
+                imported_rules_text: String::new(),
+                emit_own_rules: false,
+            },
+            diags,
+        ));
+    }
+
+    if stack.len() >= MAX_INCLUDE_DEPTH {
+        return Err(cap_diagnostic(
+            format!(
+                "include depth cap {MAX_INCLUDE_DEPTH} reached at `{}`",
+                path.display()
+            ),
+            *include_span,
+        ));
+    }
+    if files.len() >= MAX_INCLUDE_FILES {
+        return Err(cap_diagnostic(
+            format!(
+                "include file cap {MAX_INCLUDE_FILES} reached at `{}`",
+                path.display()
+            ),
+            *include_span,
+        ));
     }
 
     stack.push(canon.clone());
+
+    let raw = match fs::read_to_string(&canon) {
+        Ok(raw) => raw,
+        Err(e) => {
+            stack.pop();
+            return Err(io_diagnostic(
+                format!("failed to read ADGL file `{}`: {e}", path.display()),
+                *include_span,
+            ));
+        }
+    };
+    if budget.bytes.saturating_add(raw.len()) > MAX_INCLUDE_BYTES {
+        stack.pop();
+        return Err(cap_diagnostic(
+            format!(
+                "include byte cap {MAX_INCLUDE_BYTES} reached at `{}`",
+                path.display()
+            ),
+            *include_span,
+        ));
+    }
+    budget.bytes += raw.len();
     if !files.contains(&canon) {
         files.push(canon.clone());
     }
 
-    let raw = fs::read_to_string(&canon).map_err(|e| {
-        io_diagnostic(
-            format!("failed to read ADGL file `{}`: {e}", path.display()),
-            *include_span,
-        )
-    })?;
-
-    let (includes, body) = strip_leading_includes(&raw, &canon)?;
+    let (includes, body) = match strip_leading_includes(&raw, &canon) {
+        Ok(pair) => pair,
+        Err(buf) => {
+            stack.pop();
+            return Err(buf);
+        }
+    };
 
     let mut imported_rules_text = String::new();
     let parent = canon.parent().unwrap_or_else(|| Path::new("."));
     for inc in &includes {
         let child_path = parent.join(&inc.path);
-        let child = expand_file_from_include(&child_path, &inc.span, stack, files, expanded_once)?;
-        imported_rules_text.push_str(&child.imported_rules_text);
-        if child.emit_own_rules {
-            imported_rules_text.push_str(&rules_text_from_body(&child.body)?);
-            if !imported_rules_text.is_empty() && !imported_rules_text.ends_with('\n') {
-                imported_rules_text.push('\n');
+        match expand_file_from_include(&child_path, &inc.span, stack, files, expanded_once, budget)
+        {
+            Ok((child, child_diags)) => {
+                diags.extend(child_diags);
+                imported_rules_text.push_str(&child.imported_rules_text);
+                if child.emit_own_rules {
+                    match rules_text_from_body(&child.body) {
+                        Ok(text) => {
+                            imported_rules_text.push_str(&text);
+                            if !imported_rules_text.is_empty()
+                                && !imported_rules_text.ends_with('\n')
+                            {
+                                imported_rules_text.push('\n');
+                            }
+                        }
+                        Err(buf) if is_cycle(&buf) => {
+                            stack.pop();
+                            return Err(buf);
+                        }
+                        Err(buf) => diags.extend(buf),
+                    }
+                }
             }
+            Err(buf) if is_cycle(&buf) => {
+                stack.pop();
+                return Err(buf);
+            }
+            Err(buf) => diags.extend(buf),
         }
     }
 
     stack.pop();
     expanded_once.insert(canon);
-    Ok(ExpandedFile {
-        body,
-        imported_rules_text,
-        emit_own_rules: true,
-    })
+    Ok((
+        ExpandedFile {
+            body,
+            imported_rules_text,
+            emit_own_rules: true,
+        },
+        diags,
+    ))
+}
+
+fn is_cycle(buf: &DiagBuffer) -> bool {
+    buf.iter().any(|d| d.code == "ADGL4000")
 }
 
 fn rules_text_from_body(body: &str) -> Result<String, DiagBuffer> {
@@ -384,6 +481,19 @@ fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn cap_diagnostic(message: impl Into<String>, span: Span) -> DiagBuffer {
+    let mut buf = DiagBuffer::new();
+    buf.push(Diagnostic::error(
+        "ADGL4004",
+        format!(
+            "{message} (coverage=partial cap=include kept=parsed dropped=remaining)",
+            message = message.into()
+        ),
+        span,
+    ));
+    buf
 }
 
 fn io_diagnostic(message: impl Into<String>, span: Span) -> DiagBuffer {

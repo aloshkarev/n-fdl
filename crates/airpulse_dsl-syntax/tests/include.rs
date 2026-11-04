@@ -80,3 +80,50 @@ fn load_ruleset_diamond_include_expands_once() {
         "shared rules must appear once under diamond includes"
     );
 }
+
+#[test]
+fn one_bad_include_keeps_the_rules_that_parsed() {
+    let dir = std::env::temp_dir().join(format!("adgl-include-partial-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let shared = r#"
+ruleset "shared" {
+  version = "1.0"
+  evidence shared_ev {
+    scope: AccessPoint
+    anchor a: event(test.shared) { a.x == 1 }
+    infer Cause(SharedSignal) { target: a.target, weight: +10, evidence: [a] }
+  }
+}
+"#;
+    let main = r#"
+include "missing.adgl"
+include "shared.adgl"
+ruleset "main" {
+  version = "1.0"
+  evidence main_ev {
+    scope: AccessPoint
+    anchor a: event(test.main) { a.y == 2 }
+    infer Cause(MainSignal) { target: a.target, weight: +10, evidence: [a] }
+  }
+}
+"#;
+    std::fs::write(dir.join("shared.adgl"), shared).unwrap();
+    let entry = dir.join("main.adgl");
+    std::fs::write(&entry, main).unwrap();
+
+    let loaded = load_ruleset(&entry).expect("entry still loads");
+    let ast = loaded.parse().expect("composed source parses");
+    assert_eq!(rule_names(&ast), ["shared_ev", "main_ev"]);
+    let msg = loaded
+        .diagnostics
+        .iter()
+        .map(|d| format!("{} {}", d.code, d.message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        msg.contains("ADGL4001") && msg.contains("missing.adgl"),
+        "missing include stays a diagnostic, got:\n{msg}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

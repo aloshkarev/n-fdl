@@ -1,8 +1,6 @@
 use airpulse_dsl_catalog::{EventOrBindingType, resolve_metric_path};
 use airpulse_dsl_evaluator::schema::EVENT_FIELD_TARGET;
-use airpulse_dsl_evaluator::{
-    Engine, EngineDiagnostic, OfflineAuditSink, RunMode, StaticTopology, to_sarif,
-};
+use airpulse_dsl_evaluator::{Engine, OfflineAuditSink, RunMode, StaticTopology, to_sarif};
 use airpulse_dsl_ir::{FieldIdx, ProgramImage};
 use airpulse_dsl_store::{EventNode, EventProvenance, EvidenceEdgeKind, Limits};
 use airpulse_dsl_syntax::parse_ruleset;
@@ -793,7 +791,7 @@ ruleset "airpulse.catalog_exclusivity" {
 }
 
 #[test]
-fn g09_unsupported_target_tail_emits_adgl3008() {
+fn g09_unsupported_target_tail_is_not_a_proven_scope() {
     const BAD_TARGET_RULESET: &str = r#"
 ruleset "airpulse.bad_target_tail" {
     version = "1.0"
@@ -807,24 +805,11 @@ ruleset "airpulse.bad_target_tail" {
 }
 "#;
 
-    let img = parse_verify_image(BAD_TARGET_RULESET);
-    let mut eng = offline_engine(&img);
-    let s = session_scope();
-
-    eng.ingest(evt(
-        1,
-        "tcp.retransmission_burst",
-        90_000,
-        s,
-        vec![(field_idx("tcp.retransmission_burst", "segment_size"), 1600)],
-    ));
-    eng.finish();
-
+    let ast = parse_ruleset(BAD_TARGET_RULESET).expect("ruleset parses");
+    let err = verify(&ast).expect_err("segment_size is not a target scope");
     assert!(
-        eng.diagnostics().iter().any(|d| {
-            matches!(d, EngineDiagnostic::UnsupportedTargetTail { .. })
-                && d.code() == Some("ADGL3008")
-        }),
-        "unsupported target tails must surface a stable ADGL3008 diagnostic"
+        err.iter()
+            .any(|d| d.code == "ADGL0210" && d.message.contains("target scope is absent")),
+        "an unproven infer target is not replaced by the rule scope"
     );
 }

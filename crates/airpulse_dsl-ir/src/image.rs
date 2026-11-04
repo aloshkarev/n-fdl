@@ -80,6 +80,9 @@ pub struct ProgramImage {
     /// Anchor lookup index, built at construction — not part of the
     /// serialized image (derivable from `rules`).
     index: RuleIndex,
+    /// Set when a rule index did not fit in `u32`. Later rules stay on the
+    /// image and are not aliased onto `u32::MAX`.
+    index_partial: Option<&'static str>,
 }
 
 impl ProgramImage {
@@ -105,9 +108,12 @@ impl ProgramImage {
         catalog_ref: CatalogRef,
     ) -> ProgramImage {
         let mut index = RuleIndex::default();
+        let mut index_partial = None;
         for (pos, rule) in rules.iter().enumerate() {
-            // Positions fit u32: rule count is verifier-bounded (05 §9).
-            let pos = u32::try_from(pos).unwrap_or(u32::MAX);
+            let Ok(pos) = Self::rule_index_slot(pos) else {
+                index_partial = Some("rule-index");
+                break;
+            };
             match &rule.anchor.source {
                 AnchorSource::Event(t) => index.by_event.entry(t.clone()).or_default().push(pos),
                 AnchorSource::Cause(k) => index.by_cause.entry(k.clone()).or_default().push(pos),
@@ -125,7 +131,22 @@ impl ProgramImage {
             rules,
             catalog_ref,
             index,
+            index_partial,
         }
+    }
+
+    /// `Ok(slot)` when `pos` fits in the anchor index. Past `u32::MAX` the
+    /// slot is refused so overflow does not alias every later rule onto one
+    /// index.
+    #[must_use]
+    pub fn rule_index_slot(pos: usize) -> Result<u32, &'static str> {
+        u32::try_from(pos).map_err(|_| "rule-index")
+    }
+
+    /// `Some("rule-index")` when construction stopped indexing past `u32::MAX`.
+    #[must_use]
+    pub fn index_partial(&self) -> Option<&'static str> {
+        self.index_partial
     }
 
     /// Rules anchored on `key` in partitions of scope type `scope`, filtered

@@ -22,6 +22,17 @@ Snapshot {
             confidence: Confidence(
                 90,
             ),
+            evidence_refs: [
+                (
+                    "crc",
+                    Present,
+                ),
+                (
+                    "flap",
+                    Present,
+                ),
+            ],
+            published_id: "PhysicalCableDamage@port:c9a473bad77f640e:port:c9a473bad77f640e",
         },
     ],
     problems: [

@@ -22,6 +22,17 @@ Snapshot {
             confidence: Confidence(
                 85,
             ),
+            evidence_refs: [
+                (
+                    "rtx",
+                    Present,
+                ),
+                (
+                    "ptb",
+                    Present,
+                ),
+            ],
+            published_id: "PmtudBlackhole@session:1ea8843fc09c3a6a:session:1ea8843fc09c3a6a",
         },
     ],
     problems: [

@@ -32,5 +32,7 @@ fn main() {
     let mut p = Parser::new(&src);
     let _ = p.parse_protocol();
 
-    println!("Fuzz passed: {} tokens processed, no panic", count);
+    // A fuzz walk is not a decode and not a cause.
+    println!("coverage=absent");
+    let _ = count;
 }

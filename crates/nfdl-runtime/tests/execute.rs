@@ -8,8 +8,12 @@ fn execute_arp_datagram() {
     let proto = p.parse_protocol().expect("parse failed");
 
     let mut vm = VmState::new();
-    let result = vm.execute_datagram(&proto);
-    assert!(result.is_ok(), "ARP execution should succeed");
+    let result = vm.execute_datagram(&proto, &[0u8; 28]);
+    assert_ne!(
+        result,
+        nfdl_runtime::DatagramCoverage::Absent,
+        "a non-empty ARP buffer is not absent"
+    );
 }
 
 #[test]
@@ -54,7 +58,10 @@ fn execute_gtpu_with_depth_limit() {
     let proto = p.parse_protocol().expect("parse failed");
 
     let mut vm = VmState::new();
-    // Should succeed because depth is low
-    let result = vm.execute_datagram(&proto);
-    assert!(result.is_ok());
+    let result = vm.execute_datagram(&proto, &[0u8; 64]);
+    assert_ne!(
+        result,
+        nfdl_runtime::DatagramCoverage::Absent,
+        "a non-empty GTP-U buffer is not absent"
+    );
 }

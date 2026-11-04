@@ -2,7 +2,7 @@
 //! assigned by ADR-011; degrade + diagnostic, never a panic — `07` §9).
 
 use airpulse_dsl_store::StoreDiagnostic;
-use airpulse_dsl_types::{EventId, EventTime, EventType, MetricPath, RuleId, ScopeId};
+use airpulse_dsl_types::{CauseKind, EventId, EventTime, EventType, MetricPath, RuleId, ScopeId};
 
 use crate::error::CorrelateError;
 
@@ -107,6 +107,31 @@ pub enum EngineDiagnostic {
         /// Watermark that the event was late relative to.
         wm: EventTime,
     },
+    /// `ADGL3104` — `resolve_cause` rejected the kind. The infer is not a
+    /// published cause.
+    UnknownCause {
+        /// The rule that tried to infer the kind.
+        rule: RuleId,
+        /// The kind that is not in the catalog.
+        kind: CauseKind,
+    },
+    /// `ADGL3105` — the target's scope type is outside the catalog row's
+    /// `valid_scopes`. The infer is not published.
+    CauseScopeRejected {
+        /// The rule that tried to publish.
+        rule: RuleId,
+        /// Catalog kind that was resolved.
+        kind: CauseKind,
+        /// Target whose type is not valid for that kind.
+        target: ScopeId,
+    },
+    /// `ADGL3106` — an infer with an empty evidence list is not a cause.
+    EmptyCauseEvidence {
+        /// The rule that tried to publish.
+        rule: RuleId,
+        /// Catalog kind that was resolved.
+        kind: CauseKind,
+    },
 }
 
 impl EngineDiagnostic {
@@ -121,6 +146,9 @@ impl EngineDiagnostic {
             EngineDiagnostic::RuleFiringsExceeded { .. } => Some("ADGL3103"),
             EngineDiagnostic::LateEvidence { .. } => Some("ADGL3002"),
             EngineDiagnostic::LateEventDropped { .. } => Some("ADGL3003"),
+            EngineDiagnostic::UnknownCause { .. } => Some("ADGL3104"),
+            EngineDiagnostic::CauseScopeRejected { .. } => Some("ADGL3105"),
+            EngineDiagnostic::EmptyCauseEvidence { .. } => Some("ADGL3106"),
             EngineDiagnostic::UnresolvedTarget { .. }
             | EngineDiagnostic::RuntimeCheckWindow { .. }
             | EngineDiagnostic::MissingAnchor { .. }

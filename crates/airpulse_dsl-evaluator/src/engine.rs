@@ -30,20 +30,20 @@
 use std::collections::{BTreeSet, HashMap};
 
 use airpulse_dsl_catalog::{
-    EventOrBindingType, FieldType, exclusivity_defaults, resolve_event, resolve_metric_path,
-    resolve_problem,
+    EventOrBindingType, FieldType, exclusivity_defaults, resolve_cause, resolve_event,
+    resolve_metric_path, resolve_problem,
 };
 use airpulse_dsl_ir::{
     AnchorKey, CorrelateSource, CorrelateSpec, ExclusivityGroup, Intent, PendingMatch, Predicate,
     ProgramImage, ProvKey, RuleInstance, RuleKind, Symbol, WindowProof,
 };
 use airpulse_dsl_store::{
-    AmbiguityNode, AmbiguityState, CauseNode, EdgeEndpoint, EventNode, EvidenceEdge,
-    EvidenceEdgeKind, GraphStore, Limits, ProblemNode, RuntimeProvKey, window_id,
+    AmbiguityNode, AmbiguityState, EdgeEndpoint, EventNode, EvidenceEdge, EvidenceEdgeKind,
+    GraphStore, Limits, ProblemNode, RuntimeProvKey, window_id,
 };
 use airpulse_dsl_types::{
-    ActionKind, CauseKind, Confidence, DurationMs, EventTime, EventType, MetricPath, NodeId,
-    ProblemKind, RuleId, SarifId, ScopeId, Severity, T3, Weight,
+    ActionKind, CauseKind, Confidence, DurationMs, EventTime, EventType, EvidenceState, MetricPath,
+    NodeId, ProblemKind, RuleId, SarifId, ScopeId, Severity, T3, Weight,
 };
 
 use crate::binding::{Binding, Bound, CauseSnapshot, ProblemSnapshot};
@@ -52,7 +52,7 @@ use crate::evidence::collect_problem_evidence;
 use crate::extract::{CauseView, ProblemView, Snapshot};
 use crate::interner::ScopeInterner;
 use crate::predicate::{PredCtx, eval_predicate};
-use crate::sarif::{SarifOptions, to_sarif_with_options};
+use crate::sarif::{SarifOptions, published_cause_id, to_sarif_with_options};
 use crate::sink::{ActionIntent, ActionSink, OfflineAuditSink, RunMode};
 use crate::topology::{TopoFunc, TopologyProvider};
 
@@ -268,6 +268,8 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     target: *target,
                     time: node.time,
                     confidence: node.confidence,
+                    evidence_refs: node.evidence_refs.clone(),
+                    published_id: published_cause_id(kind.as_str(), scope, *target),
                 });
             }
             let cause_kinds_by_node: HashMap<_, _> = part
@@ -945,6 +947,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     target,
                     weight,
                     evidence,
+                    evidence_state,
                     provenance_key,
                     ..
                 } => {
@@ -954,6 +957,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                         target,
                         *weight,
                         evidence,
+                        evidence_state,
                         provenance_key,
                         bindings,
                         anchor,
@@ -1004,6 +1008,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         target_path: &MetricPath,
         weight: Weight,
         evidence: &[Symbol],
+        evidence_state: &[EvidenceState],
         provenance_key: &ProvKey,
         bindings: &[Binding],
         anchor: &Bound,
@@ -1017,6 +1022,28 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             });
             return;
         };
+        let Some(schema) = resolve_cause(cause.as_str()) else {
+            self.diagnostics.push(EngineDiagnostic::UnknownCause {
+                rule: rule.id.clone(),
+                kind: cause.clone(),
+            });
+            return;
+        };
+        if !schema.valid_scopes.contains(&target.scope_type()) {
+            self.diagnostics.push(EngineDiagnostic::CauseScopeRejected {
+                rule: rule.id.clone(),
+                kind: cause.clone(),
+                target,
+            });
+            return;
+        }
+        if evidence.is_empty() {
+            self.diagnostics.push(EngineDiagnostic::EmptyCauseEvidence {
+                rule: rule.id.clone(),
+                kind: cause.clone(),
+            });
+            return;
+        }
         let anchor_time = anchor.time();
         let dedup_window = self.store.limits().dedup_window;
         let key = RuntimeProvKey {
@@ -1037,6 +1064,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         let candidate_node_id = self.next_node_id + 1;
 
         let mutation: CauseSnapshot;
+        let created: bool;
         {
             let mut part = self.store.partition_mut(scope);
             let exists = part.causes.contains_key(&(cause.clone(), target));
@@ -1049,27 +1077,31 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             if !part.try_insert_provenance(key.clone()) {
                 return; // dedup no-op (03 §3.3, C12)
             }
-            let mut created = false;
+            let refs: Vec<(&str, EvidenceState)> = evidence
+                .iter()
+                .enumerate()
+                .map(|(i, sym)| {
+                    let state = evidence_state
+                        .get(i)
+                        .copied()
+                        .unwrap_or(EvidenceState::Present);
+                    (sym.as_str(), state)
+                })
+                .collect();
+            let (dst, was_created) = part.upsert_cause(
+                cause.clone(),
+                target,
+                anchor_time,
+                NodeId::new(candidate_node_id),
+                &refs,
+            );
+            created = was_created;
             let node = part
                 .causes
-                .entry((cause.clone(), target))
-                .or_insert_with(|| {
-                    created = true;
-                    CauseNode {
-                        id: NodeId::new(candidate_node_id),
-                        kind: cause.clone(),
-                        target,
-                        // Cause.time = Evt.time at first infer, stable after
-                        // (03 §3.3 comment, 04 §3).
-                        time: anchor_time,
-                        confidence: Confidence::MIN,
-                        evidence: Vec::new(),
-                        provenance: Vec::new(),
-                    }
-                });
+                .get_mut(&(cause.clone(), target))
+                .expect("upsert_cause inserts the catalog cause");
             node.confidence = node.confidence.apply(weight);
             node.provenance.push(key);
-            let dst = node.id;
             mutation = CauseSnapshot {
                 node: dst,
                 kind: cause.clone(),
@@ -1127,17 +1159,20 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             }
         }
         // Child cause node for the RollsUp provenance edge (`09` §3.2).
-        let child_node = self.store.partition(child_scope).and_then(|part| {
+        let child = self.store.partition(child_scope).and_then(|part| {
             part.causes
                 .get(&(cause.clone(), target))
-                .map(|node| node.id)
+                .map(|node| (node.id, node.evidence_refs.clone()))
         });
+        let child_node = child.as_ref().map(|(id, _)| *id);
+        let child_refs = child.map(|(_, refs)| refs).unwrap_or_default();
 
         self.touched.insert(parent_scope);
         self.interner.intern(parent_scope);
         let max_causes = self.store.limits().max_causes_per_scope;
         let candidate_node_id = self.next_node_id + 1;
         let mutation: CauseSnapshot;
+        let created: bool;
         {
             let mut part = self.store.partition_mut(parent_scope);
             let exists = part.causes.contains_key(&(cause.clone(), target));
@@ -1148,24 +1183,23 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 });
                 return;
             }
-            let mut created = false;
+            let pairs: Vec<(&str, EvidenceState)> = child_refs
+                .iter()
+                .map(|(name, state)| (name.as_ref(), *state))
+                .collect();
+            let (dst, was_created) = part.upsert_cause(
+                cause.clone(),
+                target,
+                self.store.watermark(),
+                NodeId::new(candidate_node_id),
+                &pairs,
+            );
+            created = was_created;
             let node = part
                 .causes
-                .entry((cause.clone(), target))
-                .or_insert_with(|| {
-                    created = true;
-                    CauseNode {
-                        id: NodeId::new(candidate_node_id),
-                        kind: cause.clone(),
-                        target,
-                        time: self.store.watermark(),
-                        confidence: Confidence::MIN,
-                        evidence: Vec::new(),
-                        provenance: Vec::new(),
-                    }
-                });
+                .get_mut(&(cause.clone(), target))
+                .expect("upsert_cause inserts the rolled-up cause");
             node.confidence = max_conf;
-            let dst = node.id;
             mutation = CauseSnapshot {
                 node: dst,
                 kind: cause.clone(),

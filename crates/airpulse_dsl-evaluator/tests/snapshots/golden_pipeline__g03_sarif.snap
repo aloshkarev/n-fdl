@@ -1,6 +1,5 @@
 ---
 source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
-assertion_line: 180
 expression: to_sarif(&eng.snapshot())
 ---
-{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"adgl"}},"results":[]}]}
+{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"adgl"}},"results":[{"ruleId":"AuthServerOutage@client_mac:646b14dff4eb8f88:vlan:0f032fb3e681c51d","level":"note","message":{"text":"AuthServerOutage coverage=complete"},"partialFingerprints":{"scope":"client_mac","scopeKey":"client_mac:646b14dff4eb8f88","target":"vlan:0f032fb3e681c51d"},"properties":{"coverage":"complete","evidence":[{"name":"dhcp","state":"present"}]}},{"ruleId":"AuthServerOutage@vlan:0f032fb3e681c51d:vlan:0f032fb3e681c51d","level":"note","message":{"text":"AuthServerOutage coverage=complete"},"partialFingerprints":{"scope":"vlan","scopeKey":"vlan:0f032fb3e681c51d","target":"vlan:0f032fb3e681c51d"},"properties":{"coverage":"complete","evidence":[{"name":"dhcp","state":"present"}]}}]}]}

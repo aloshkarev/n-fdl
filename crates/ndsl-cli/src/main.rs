@@ -35,6 +35,21 @@ fn usage() {
     );
 }
 
+/// Coverage of a ruleset load or a decode. This is not a cause.
+fn coverage_label(ast_built: bool, partial: bool) -> &'static str {
+    if !ast_built {
+        "absent"
+    } else if partial {
+        "partial"
+    } else {
+        "complete"
+    }
+}
+
+fn print_coverage(ast_built: bool, partial: bool) {
+    println!("coverage={}", coverage_label(ast_built, partial));
+}
+
 fn detect_lang(path: &Path) -> Option<Lang> {
     match path
         .extension()
@@ -100,7 +115,8 @@ fn cmd_parse(path: &Path) -> i32 {
                 }
             };
             match Parser::new(&src).parse_protocol() {
-                Ok(proto) => {
+                Ok(proto) if !proto.name.is_empty() => {
+                    print_coverage(true, false);
                     println!(
                         "ok: nfdl {} (messages={}, state_machines={})",
                         proto.name,
@@ -109,7 +125,14 @@ fn cmd_parse(path: &Path) -> i32 {
                     );
                     0
                 }
+                Ok(_) => {
+                    // An empty protocol name means the AST was not built.
+                    print_coverage(false, false);
+                    eprintln!("error: nfdl protocol AST was not built");
+                    1
+                }
                 Err(e) => {
+                    print_coverage(false, false);
                     print_nfdl_parse_error(&e);
                     1
                 }
@@ -120,6 +143,7 @@ fn cmd_parse(path: &Path) -> i32 {
             let loaded = match load_ruleset(path) {
                 Ok(l) => l,
                 Err(buf) => {
+                    print_coverage(false, false);
                     let rendered = buf.render("", &path.display().to_string());
                     if rendered.is_empty() {
                         eprintln!(
@@ -138,6 +162,16 @@ fn cmd_parse(path: &Path) -> i32 {
             };
             match loaded.parse() {
                 Ok(ruleset) => {
+                    let partial = loaded.diagnostics.has_errors();
+                    print_coverage(true, partial);
+                    if partial {
+                        eprint!(
+                            "{}",
+                            loaded
+                                .diagnostics
+                                .render(&loaded.source, &path.display().to_string())
+                        );
+                    }
                     let evidence = ruleset
                         .rules
                         .iter()
@@ -155,6 +189,7 @@ fn cmd_parse(path: &Path) -> i32 {
                     0
                 }
                 Err(buf) => {
+                    print_coverage(false, false);
                     let rendered = buf.render(&loaded.source, &path.display().to_string());
                     if rendered.is_empty() {
                         eprintln!(
@@ -344,6 +379,8 @@ fn cmd_check(paths: &[PathBuf]) -> i32 {
             }
         }
     }
+    // `check: ok` only when every path built an AST (exit 0). Coverage was
+    // already printed by parse: absent, partial, or complete. No cause is chosen.
     if exit == 0 {
         println!(
             "check: ok ({} path(s); parse+lint only — use `verify` for ADGL semantics)",
@@ -369,6 +406,7 @@ fn cmd_verify(paths: &[PathBuf]) -> i32 {
         }
         match verify_path(path) {
             Ok(verified) => {
+                print_coverage(true, false);
                 println!(
                     "ok: verify {} (rules={})",
                     path.display(),
@@ -376,6 +414,17 @@ fn cmd_verify(paths: &[PathBuf]) -> i32 {
                 );
             }
             Err(buf) => {
+                let cycle = buf.iter().any(|d| d.code == "ADGL4000");
+                let include_partial = buf
+                    .iter()
+                    .any(|d| d.code == "ADGL4001" || d.code == "ADGL4004");
+                if cycle {
+                    print_coverage(false, false);
+                } else if include_partial {
+                    print_coverage(true, true);
+                } else {
+                    print_coverage(true, false);
+                }
                 // Prefer composed source when load succeeded far enough; fall back to disk.
                 let src = load_ruleset(path)
                     .map(|l| l.source)
@@ -423,6 +472,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
 
 fn cmd_run(nfdl_path: &Path, hex: Option<&str>) -> i32 {
     if detect_lang(nfdl_path) != Some(Lang::Nfdl) {
+        print_coverage(false, false);
         eprintln!(
             "error: run expects a .nfdl file, got {}",
             nfdl_path.display()
@@ -433,6 +483,7 @@ fn cmd_run(nfdl_path: &Path, hex: Option<&str>) -> i32 {
     let src = match fs::read_to_string(nfdl_path) {
         Ok(s) => s,
         Err(e) => {
+            print_coverage(false, false);
             eprintln!("error: cannot read {}: {e}", nfdl_path.display());
             return 2;
         }
@@ -442,6 +493,7 @@ fn cmd_run(nfdl_path: &Path, hex: Option<&str>) -> i32 {
         Some(h) => match parse_hex(h) {
             Ok(d) => d,
             Err(e) => {
+                print_coverage(false, false);
                 eprintln!("invalid hex: {e}");
                 return 2;
             }
@@ -449,8 +501,15 @@ fn cmd_run(nfdl_path: &Path, hex: Option<&str>) -> i32 {
         None => Vec::new(),
     };
 
+    if data.is_empty() {
+        // Empty bytes are coverage=absent. A protocol name is not a cause.
+        print_coverage(false, false);
+        return 1;
+    }
+
     match nfdl_runtime::parse_and_run_with_data(&src, &data) {
         Ok((_proto, ctx, final_state, evs)) => {
+            print_coverage(true, false);
             println!(
                 "run: {} bytes, final_state={}, events={}",
                 data.len(),
@@ -468,6 +527,7 @@ fn cmd_run(nfdl_path: &Path, hex: Option<&str>) -> i32 {
             0
         }
         Err(e) => {
+            print_coverage(false, false);
             eprintln!("runtime error: {e}");
             3
         }
@@ -609,6 +669,25 @@ mod tests {
         assert_eq!(detect_lang(Path::new("a.nfdl")), Some(Lang::Nfdl));
         assert_eq!(detect_lang(Path::new("b.ADGL")), Some(Lang::Adgl));
         assert_eq!(detect_lang(Path::new("c.txt")), None);
+    }
+
+    #[test]
+    fn coverage_label_does_not_invent_a_cause() {
+        assert_eq!(coverage_label(false, false), "absent");
+        assert_eq!(coverage_label(true, true), "partial");
+        assert_eq!(coverage_label(true, false), "complete");
+        assert_ne!(coverage_label(false, false), "PhysicalLinkAbsent");
+    }
+
+    #[test]
+    fn empty_nfdl_check_does_not_print_ok() {
+        let dir = std::env::temp_dir().join(format!("ndsl-empty-nfdl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("empty.nfdl");
+        std::fs::write(&path, "").unwrap();
+        let code = cmd_check(std::slice::from_ref(&path));
+        assert_ne!(code, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

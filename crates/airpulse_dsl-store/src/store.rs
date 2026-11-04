@@ -149,9 +149,16 @@ impl GraphStore {
     /// (`05` §3.1 / `08` §6): `max_lookback > max(back, forward) + slack`
     /// ⇒ an anchor event outlives every unexpired `PendingMatch` on it.
     pub fn gc(&self, watermark: EventTime, max_lookback: DurationMs) -> usize {
+        let mut keep = std::collections::HashSet::new();
+        for entry in self.pending.iter() {
+            keep.extend(entry.value().unexpired_anchor_ids(watermark));
+        }
+        // `idle_timeout` excludes idle sources from the live watermark. It is
+        // not a second eviction horizon: an event named by an unexpired wait
+        // stays even when it is older than `max_lookback`.
         let mut evicted = 0;
         for mut entry in self.rings.iter_mut() {
-            evicted += entry.value_mut().gc(watermark, max_lookback);
+            evicted += entry.value_mut().gc_keeping(watermark, max_lookback, &keep);
         }
         // Prune unreachable provenance dedup keys alongside ring GC — same
         // horizon, same invariant (SubGraph::prune_provenance docs).

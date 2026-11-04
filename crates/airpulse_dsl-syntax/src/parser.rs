@@ -1675,6 +1675,20 @@ impl<'a> ParserState<'a> {
             }
         }
         let end = self.consume_punct(TokenKind::RBrace, "}")?.end;
+        let has_target = fields
+            .iter()
+            .any(|field| matches!(field, InferField::Target(_, _)));
+        let has_evidence = fields
+            .iter()
+            .any(|field| matches!(field, InferField::Evidence(refs, _) if !refs.is_empty()));
+        if !has_target || !has_evidence {
+            return Err(ParseErr::new(
+                "ADGL0101",
+                "infer requires a target and non-empty evidence",
+                "target: <scope>, evidence: [<binding>]",
+                Span::new(start, end),
+            ));
+        }
         Ok(InferStmt {
             cause,
             fields,

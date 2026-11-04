@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 pub use adgl::{
-    ADGLS_ABSENCE_IDIOM, ADGLS_EMPTY_HAVING, ADGLS_FLOAT_LITERAL, ADGLS_UNUSED_CORRELATE,
+    ADGLS_ABSENCE_IDIOM, ADGLS_EMPTY_HAVING, ADGLS_FLOAT_LITERAL, ADGLS_GUARDED_EVIDENCE,
+    ADGLS_UNUSED_CORRELATE,
 };
 use airpulse_dsl_syntax::ast::Ruleset;
 use airpulse_dsl_syntax::parse_ruleset;
@@ -282,24 +283,42 @@ impl LintStore {
     pub fn lint_paths(&self, paths: &[PathBuf]) -> Result<Vec<FileDiagnostic>, WalkError> {
         let mut files = Vec::new();
         let mut explicit_files = HashSet::new();
+        let mut path_errors = Vec::new();
         for path in paths {
             let is_dir = path.is_dir();
-            collect_targets(path, &mut files)?;
-            if !is_dir {
-                explicit_files.insert(path.clone());
+            match collect_targets(path, &mut files) {
+                Ok(()) => {
+                    if !is_dir {
+                        explicit_files.insert(path.clone());
+                    }
+                }
+                Err(e) => path_errors.push(e),
             }
         }
         files.sort();
         files.dedup();
 
         let mut out = Vec::new();
+        let mut walked = false;
         for path in files {
             match self.lint_file(&path) {
-                Ok(diags) => out.extend(diags),
+                Ok(diags) => {
+                    walked = true;
+                    out.extend(diags);
+                }
                 Err(WalkError::Io(p, e)) if !explicit_files.contains(&path) => {
                     eprintln!("warning: skipping {}: {e}", p.display());
                 }
-                Err(e) => return Err(e),
+                Err(e) => path_errors.push(e),
+            }
+        }
+        if !walked {
+            if let Some(err) = path_errors.into_iter().next() {
+                return Err(err);
+            }
+        } else {
+            for err in path_errors {
+                eprintln!("warning: {err}");
             }
         }
         Ok(out)
@@ -519,8 +538,8 @@ mod tests {
     fn lint_store_register_builtin_registers_demo() {
         let mut store = LintStore::new();
         store.register_builtin();
-        // N-FDL pack (5) + ADGL pack (4) + engine-smoke NFDL0900.
-        assert_eq!(store.len(), 10);
+        // N-FDL pack (5) + ADGL pack (5, including ADGLS0400) + engine-smoke NFDL0900.
+        assert_eq!(store.len(), 11);
         assert_eq!(store.effective_level(NFDL_EMPTY_FILE), LintLevel::Warn);
         assert_eq!(store.effective_level(NFDL_NAMING_TYPE), LintLevel::Warn);
         assert_eq!(
@@ -528,6 +547,10 @@ mod tests {
             LintLevel::Warn
         );
         assert_eq!(store.effective_level(ADGLS_ABSENCE_IDIOM), LintLevel::Warn);
+        assert_eq!(
+            store.effective_level(ADGLS_GUARDED_EVIDENCE),
+            LintLevel::Warn
+        );
     }
 
     #[test]
@@ -721,5 +744,25 @@ protocol bad_proto {{
         store.register_builtin();
         let err = store.lint_paths(&[path]).unwrap_err();
         assert!(matches!(err, WalkError::Io(_, _)));
+    }
+
+    #[test]
+    fn lint_store_keeps_walking_after_one_bad_path() {
+        let missing =
+            std::env::temp_dir().join(format!("ndsl-clippy-miss-{}.adgl", std::process::id()));
+        let _ = fs::remove_file(&missing);
+        let ok = std::env::temp_dir().join(format!("ndsl-clippy-ok-{}.adgl", std::process::id()));
+        fs::write(&ok, "").unwrap();
+
+        let mut store = LintStore::new();
+        store.register_builtin();
+        let diags = store
+            .lint_paths(&[missing, ok.clone()])
+            .expect("a later path still lints");
+        assert!(
+            diags.iter().any(|d| d.path == ok),
+            "the readable file must still be linted, got {diags:?}"
+        );
+        let _ = fs::remove_file(&ok);
     }
 }

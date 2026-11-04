@@ -64,7 +64,14 @@ pub struct Lexer<'a> {
     pending_trivia: Vec<Trivia>,
     /// Byte span of the most recently returned token.
     last_token_span: Span,
+    /// Set after the one error emitted for a source over [`MAX_SOURCE_BYTES`].
+    source_faulted: bool,
 }
+
+/// A source larger than this is one error, then `Eof`. It is not a cause.
+const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
+/// A string longer than this, or an unclosed string, is `Token::Error`.
+const MAX_STRING_BYTES: usize = 255;
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
@@ -74,6 +81,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             pending_trivia: Vec::new(),
             last_token_span: Span::unknown(),
+            source_faulted: false,
         }
     }
 
@@ -144,6 +152,14 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn next_token(&mut self) -> Token {
+        if self.input.len() > MAX_SOURCE_BYTES {
+            if !self.source_faulted {
+                self.source_faulted = true;
+                self.last_token_span = Span::unknown();
+                return Token::Error("source exceeds 4MiB".into());
+            }
+            return Token::Eof;
+        }
         self.pending_trivia.clear();
         self.skip_whitespace_and_comments();
         let start = self.pos;
@@ -234,13 +250,24 @@ impl<'a> Lexer<'a> {
             }
             Some('"') => {
                 let mut s = String::new();
+                let mut closed = false;
+                let mut truncated = false;
                 while let Some(c) = self.bump() {
                     if c == '"' {
+                        closed = true;
                         break;
+                    }
+                    if truncated || s.len() + c.len_utf8() > MAX_STRING_BYTES {
+                        truncated = true;
+                        continue;
                     }
                     s.push(c);
                 }
-                Token::String(s)
+                if closed && !truncated {
+                    Token::String(s)
+                } else {
+                    Token::Error("truncated string".into())
+                }
             }
             Some('>') => {
                 if self.peek() == Some('=') {
@@ -362,5 +389,29 @@ mod tests {
         assert_eq!(trivia[0].kind, TriviaKind::DocComment);
         assert_eq!(trivia[0].text, "/// hello");
         assert_eq!(trivia[0].span, Span::new(0, "/// hello".len()));
+    }
+
+    #[test]
+    fn unclosed_or_long_string_is_truncated_and_consumed() {
+        let mut open = Lexer::new("\"abc");
+        assert_eq!(open.next_token(), Token::Error("truncated string".into()));
+        assert_eq!(open.next_token(), Token::Eof);
+
+        let long_src = format!("\"{}\" protocol", "a".repeat(256));
+        let mut long = Lexer::new(&long_src);
+        assert_eq!(long.next_token(), Token::Error("truncated string".into()));
+        assert!(matches!(long.next_token(), Token::Protocol));
+    }
+
+    #[test]
+    fn source_over_4mib_is_one_error_then_eof() {
+        let src = "a".repeat(MAX_SOURCE_BYTES + 1);
+        let mut lexer = Lexer::new(&src);
+        assert_eq!(
+            lexer.next_token(),
+            Token::Error("source exceeds 4MiB".into())
+        );
+        assert_eq!(lexer.next_token(), Token::Eof);
+        assert_eq!(lexer.next_token(), Token::Eof);
     }
 }

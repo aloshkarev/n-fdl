@@ -1,6 +1,5 @@
 ---
 source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
-assertion_line: 298
 expression: snap
 ---
 Snapshot {
@@ -23,6 +22,13 @@ Snapshot {
             confidence: Confidence(
                 40,
             ),
+            evidence_refs: [
+                (
+                    "storm",
+                    Present,
+                ),
+            ],
+            published_id: "RfInterference@access_point:9cfe6e4d6d87e5e8:access_point:9cfe6e4d6d87e5e8",
         },
     ],
     problems: [],

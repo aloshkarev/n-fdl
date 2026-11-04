@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use airpulse_dsl_ir::ProvKey;
 use airpulse_dsl_types::{
-    CauseKind, Confidence, DurationMs, EventId, EventTime, NodeId, ProblemKind, RuleId, SarifId,
-    ScopeId, Severity,
+    CauseKind, Confidence, DurationMs, EventId, EventTime, EvidenceState, NodeId, ProblemKind,
+    RuleId, SarifId, ScopeId, Severity,
 };
 
 /// Full runtime provenance-dedup key (`03` §3.3
@@ -52,6 +52,28 @@ pub struct CauseNode {
     /// Provenance keys that contributed to this cause — the per-node view of
     /// the dedup set, for SARIF explanation (`03` §3.3).
     pub provenance: Vec<RuntimeProvKey>,
+    /// Tagged evidence symbols, including absent refs. This is not a cause id.
+    pub evidence_refs: Vec<(Box<str>, EvidenceState)>,
+}
+
+impl CauseNode {
+    /// Copies tagged evidence onto the node. An existing name keeps `Absent`
+    /// when a later infer does not replace it with `Present`.
+    pub fn merge_evidence_refs(&mut self, refs: &[(&str, EvidenceState)]) {
+        for (name, state) in refs {
+            if let Some((_, existing)) = self
+                .evidence_refs
+                .iter_mut()
+                .find(|(current, _)| current.as_ref() == *name)
+            {
+                if *state == EvidenceState::Present || *existing == EvidenceState::Absent {
+                    *existing = *state;
+                }
+            } else {
+                self.evidence_refs.push(((*name).into(), *state));
+            }
+        }
+    }
 }
 
 /// An emitted problem (`04` §3 `ProblemNode`): append-only — never removed,
@@ -178,10 +200,42 @@ impl SubGraph {
         SubGraph::default()
     }
 
+    /// Inserts or updates a cause keyed by `(kind, target)` inside this
+    /// partition. The partition is the scope, so the full key is
+    /// kind + scope + target. The first-infer time is kept. Tagged evidence
+    /// refs are merged, including absent refs.
+    pub fn upsert_cause(
+        &mut self,
+        kind: CauseKind,
+        target: ScopeId,
+        time: EventTime,
+        id_if_new: NodeId,
+        refs: &[(&str, EvidenceState)],
+    ) -> (NodeId, bool) {
+        let mut created = false;
+        let node = self
+            .causes
+            .entry((kind.clone(), target))
+            .or_insert_with(|| {
+                created = true;
+                CauseNode {
+                    id: id_if_new,
+                    kind,
+                    target,
+                    time,
+                    confidence: Confidence::MIN,
+                    evidence: Vec::new(),
+                    provenance: Vec::new(),
+                    evidence_refs: Vec::new(),
+                }
+            });
+        node.merge_evidence_refs(refs);
+        (node.id, created)
+    }
+
     /// Registers an infer provenance key (`03` §3.3): returns `true` if the
     /// key was new (the infer proceeds), `false` if it was already seen this
-    /// dedup window (the infer is a no-op — "one (rule, cause, target) pair
-    /// applies at most once per window").
+    /// dedup window (the infer is a no-op).
     pub fn try_insert_provenance(&mut self, key: RuntimeProvKey) -> bool {
         self.seen_provenance.insert(key)
     }

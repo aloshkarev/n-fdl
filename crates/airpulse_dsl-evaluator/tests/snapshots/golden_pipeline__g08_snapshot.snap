@@ -22,6 +22,13 @@ Snapshot {
             confidence: Confidence(
                 45,
             ),
+            evidence_refs: [
+                (
+                    "rtx",
+                    Present,
+                ),
+            ],
+            published_id: "Congestion@session:1ea8843fc09c3a6a:session:1ea8843fc09c3a6a",
         },
         CauseView {
             scope: ScopeId {
@@ -41,6 +48,13 @@ Snapshot {
             confidence: Confidence(
                 45,
             ),
+            evidence_refs: [
+                (
+                    "rtx",
+                    Present,
+                ),
+            ],
+            published_id: "PmtudBlackhole@session:1ea8843fc09c3a6a:session:1ea8843fc09c3a6a",
         },
     ],
     problems: [

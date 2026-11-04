@@ -2,9 +2,10 @@ use airpulse_dsl_catalog::{
     ActionArgKind, EventOrBindingType, FieldType, capabilities, capability_for, catalog_ref,
     cause_count, check_kinds, event_count, events, exclusivity_defaults, observation_kinds,
     problem_count, resolve_action, resolve_cause, resolve_event, resolve_metric_path,
-    resolve_problem, resolve_problem_by_sarif, resolve_topo_fn, wifi_w0_mappings,
+    resolve_problem, resolve_problem_by_sarif, resolve_problem_by_sarif_in_scope, resolve_topo_fn,
+    wifi_w0_mappings,
 };
-use airpulse_dsl_types::{CauseKind, EventType, ProblemKind};
+use airpulse_dsl_types::{CauseKind, EventType, ProblemKind, ScopeType};
 
 #[test]
 fn resolves_all_identifiers_used_in_examples_and_fixtures() {
@@ -247,6 +248,28 @@ fn resolves_legacy_parity_sarif_ids() {
             "sarif_id {sarif_id} should resolve"
         );
     }
+}
+
+#[test]
+fn session_sarif_lookup_does_not_return_the_vlan_row() {
+    let vlan_stp =
+        resolve_problem_by_sarif_in_scope("l3_stp_spanning_tree", ScopeType::Vlan).unwrap();
+    let session_stp =
+        resolve_problem_by_sarif_in_scope("l3_stp_spanning_tree", ScopeType::Session).unwrap();
+    assert_eq!(vlan_stp.name, "SpanningTreeInstability");
+    assert_eq!(session_stp.name, "L3StpSpanningTree");
+
+    let vlan_dot1x = resolve_problem_by_sarif_in_scope("l3_dot1x_wired", ScopeType::Vlan).unwrap();
+    let session_dot1x =
+        resolve_problem_by_sarif_in_scope("l3_dot1x_wired", ScopeType::Session).unwrap();
+    assert_eq!(vlan_dot1x.name, "ClientOnboardingFailure");
+    assert_eq!(session_dot1x.name, "L3Dot1xWired");
+
+    assert!(resolve_problem_by_sarif_in_scope("l3_stp_spanning_tree", ScopeType::Global).is_none());
+    assert_eq!(
+        resolve_problem_by_sarif("l3_stp_spanning_tree").map(|schema| schema.name),
+        Some("SpanningTreeInstability")
+    );
 }
 
 #[test]
@@ -766,10 +789,20 @@ fn w1_cross_layer_paths_resolve_with_append_only_indices() {
     assert_eq!(rtt_fields, ["target", "time", "rtt_ms", "baseline_rtt_ms"]);
 
     let ap = resolve_event("wifi.ap.summary").expect("AP summary");
-    assert_eq!(
-        ap.fields.last().expect("AP fields").name,
-        "peak_worst_rssi_dbm"
-    );
+    // target=0, time=1, bssid=2, then extra fields. Later RSSI fields are
+    // append-only and must not move this W1 index.
+    let peak = ap
+        .fields
+        .iter()
+        .find(|field| field.name == "peak_worst_rssi_dbm")
+        .expect("W1 AP tail");
+    assert_eq!(peak.idx.0, 61, "wifi.ap.summary.peak_worst_rssi_dbm");
+    let predict = ap
+        .fields
+        .iter()
+        .find(|field| field.name == "rssi_predict_suspect")
+        .expect("append-only RSSI field");
+    assert!(predict.idx.0 > peak.idx.0);
     let client = resolve_event("wifi.client.summary").expect("client summary");
     assert_eq!(
         client

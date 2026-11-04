@@ -2,17 +2,17 @@
 //!
 //! This intentionally emits only a compact skeleton:
 //! `version`, `$schema`, one `run` with `tool.driver.name = "adgl"`, and
-//! `results[]` from non-superseded problems.
+//! `results[]` from non-superseded problems and one result per published cause.
 //! Full schema coverage is intentionally deferred.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use airpulse_dsl_types::{ScopeId, ScopeType, Severity};
+use airpulse_dsl_types::{EvidenceState, ScopeId, ScopeType, Severity};
 
 use crate::Snapshot;
 use crate::evidence::redact_evidence_field_map;
-use crate::extract::ProblemView;
+use crate::extract::{CauseView, ProblemView};
 
 const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 
@@ -62,9 +62,42 @@ pub fn to_sarif_with_options(snapshot: &Snapshot, options: SarifOptions) -> Stri
         first = false;
         write_result(&mut out, problem, options);
     }
+    for cause in &snapshot.causes {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        write_cause_result(&mut out, cause);
+    }
 
     out.push_str("]}]}");
     out
+}
+
+/// Published id `kind@scopeType:scopeHash:targetType:targetHash`.
+/// This is the catalog cause key, not a diagnostic code.
+#[must_use]
+pub(crate) fn published_cause_id(kind: &str, scope: ScopeId, target: ScopeId) -> String {
+    format!(
+        "{kind}@{}:{:016x}:{}:{:016x}",
+        scope_type_name(scope.scope_type()),
+        scope.hash_key(),
+        scope_type_name(target.scope_type()),
+        target.hash_key()
+    )
+}
+
+fn evidence_coverage(refs: &[(Box<str>, EvidenceState)]) -> &'static str {
+    if refs.is_empty() {
+        "absent"
+    } else if refs
+        .iter()
+        .any(|(_, state)| matches!(state, EvidenceState::Absent | EvidenceState::Partial))
+    {
+        "partial"
+    } else {
+        "complete"
+    }
 }
 
 fn write_result(out: &mut String, problem: &ProblemView, options: SarifOptions) {
@@ -82,6 +115,10 @@ fn write_result(out: &mut String, problem: &ProblemView, options: SarifOptions) 
     out.push_str("\"partialFingerprints\":{");
     out.push_str("\"scope\":");
     push_json_string(out, scope_type_name(problem.scope.scope_type()));
+    out.push(',');
+    out.push_str("\"scopeKey\":");
+    let scope_key = fingerprint_target(problem.scope);
+    push_json_string(out, &scope_key);
     out.push(',');
     out.push_str("\"target\":");
     let target = fingerprint_target(problem.target);
@@ -102,6 +139,54 @@ fn write_result(out: &mut String, problem: &ProblemView, options: SarifOptions) 
         out.push('}');
     }
     out.push('}');
+}
+
+fn write_cause_result(out: &mut String, cause: &CauseView) {
+    let coverage = evidence_coverage(&cause.evidence_refs);
+    out.push('{');
+    out.push_str("\"ruleId\":");
+    push_json_string(out, &cause.published_id);
+    out.push(',');
+    out.push_str("\"level\":\"note\",");
+    out.push_str("\"message\":{\"text\":");
+    let message = format!("{} coverage={coverage}", cause.kind.as_str());
+    push_json_string(out, &message);
+    out.push_str("},");
+    out.push_str("\"partialFingerprints\":{");
+    out.push_str("\"scope\":");
+    push_json_string(out, scope_type_name(cause.scope.scope_type()));
+    out.push(',');
+    out.push_str("\"scopeKey\":");
+    let scope_key = fingerprint_target(cause.scope);
+    push_json_string(out, &scope_key);
+    out.push(',');
+    out.push_str("\"target\":");
+    let target = fingerprint_target(cause.target);
+    push_json_string(out, &target);
+    out.push_str("},");
+    out.push_str("\"properties\":{\"coverage\":");
+    push_json_string(out, coverage);
+    out.push_str(",\"evidence\":[");
+    for (idx, (name, state)) in cause.evidence_refs.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        out.push_str("\"name\":");
+        push_json_string(out, name);
+        out.push_str(",\"state\":");
+        push_json_string(out, evidence_state_name(*state));
+        out.push('}');
+    }
+    out.push_str("]}}");
+}
+
+fn evidence_state_name(state: EvidenceState) -> &'static str {
+    match state {
+        EvidenceState::Present => "present",
+        EvidenceState::Absent => "absent",
+        EvidenceState::Partial => "partial",
+    }
 }
 
 fn write_evidence_object(
@@ -236,5 +321,39 @@ mod tests {
         let strict = to_sarif_with_options(&open_snapshot, SarifOptions::strict());
         assert!(strict.contains("\"dst_ip\":\"<redacted>\""));
         assert!(strict.contains("\"segment_size\":\"1500\""));
+        assert!(strict.contains("\"scopeKey\":\"global:"));
+    }
+
+    #[test]
+    fn cause_result_names_partial_evidence_and_does_not_invent_a_kind() {
+        use airpulse_dsl_types::{CauseKind, Confidence, EvidenceState};
+        let scope = ScopeId::GLOBAL;
+        let target = ScopeId::port(1, 1);
+        let kind = CauseKind::new("PhysicalLinkAbsent");
+        let published = super::published_cause_id(kind.as_str(), scope, target);
+        let snapshot = Snapshot {
+            causes: vec![crate::CauseView {
+                scope,
+                kind,
+                target,
+                time: EventTime::from_millis(1),
+                confidence: Confidence::MIN,
+                evidence_refs: vec![
+                    ("ev".into(), EvidenceState::Present),
+                    ("ptb".into(), EvidenceState::Absent),
+                ],
+                published_id: published.clone(),
+            }],
+            problems: Vec::new(),
+            audit: Vec::new(),
+        };
+        let json = to_sarif_with_options(&snapshot, SarifOptions::default());
+        assert!(json.contains(&format!("\"ruleId\":\"{published}\"")));
+        assert!(json.contains("PhysicalLinkAbsent coverage=partial"));
+        assert!(json.contains("\"coverage\":\"partial\""));
+        assert!(json.contains("\"name\":\"ptb\",\"state\":\"absent\""));
+        assert!(json.contains("\"scopeKey\":\"global:"));
+        assert!(!json.contains("DeviceDown"));
+        assert!(!json.contains("Healthy"));
     }
 }

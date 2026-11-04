@@ -51,6 +51,14 @@ fn event_int_lists_are_sorted_deduplicated_and_bounded() {
         .int_list_field(FieldIdx(4))
         .expect("client_macs sidecar");
     assert_eq!(clients.len(), airpulse_dsl_store::MAX_EVENT_INT_LIST_VALUES);
+    assert_eq!(
+        event.int_list_coverage(FieldIdx(4)),
+        Some(&airpulse_dsl_types::ListCoverage::Partial {
+            cap: "IntList",
+            kept: airpulse_dsl_store::MAX_EVENT_INT_LIST_VALUES,
+            dropped: 70 - airpulse_dsl_store::MAX_EVENT_INT_LIST_VALUES,
+        })
+    );
     assert!(clients.windows(2).all(|w| w[0] < w[1]));
     assert_eq!(clients[0], 0);
     assert_eq!(

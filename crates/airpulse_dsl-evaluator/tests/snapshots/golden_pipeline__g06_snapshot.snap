@@ -22,6 +22,17 @@ Snapshot {
             confidence: Confidence(
                 80,
             ),
+            evidence_refs: [
+                (
+                    "stp",
+                    Present,
+                ),
+                (
+                    "rtx",
+                    Present,
+                ),
+            ],
+            published_id: "TransientL2Disruption@session:1ea8843fc09c3a6a:session:1ea8843fc09c3a6a",
         },
     ],
     problems: [

@@ -121,6 +121,23 @@ mod tests {
     }
 
     #[test]
+    fn strict_mode_redacts_client_mac_and_bssid_before_lookup() {
+        assert!(catalog_pii_field_names().contains("client_mac"));
+        assert!(catalog_pii_field_names().contains("bssid"));
+        let mut raw = BTreeMap::new();
+        raw.insert("client_mac".to_string(), "aabbccddeeff".to_string());
+        raw.insert("bssid".to_string(), "112233445566".to_string());
+        raw.insert("segment_size".to_string(), "1500".to_string());
+        let strict = redact_evidence_field_map(&raw, true);
+        let text = format!("{strict:?}");
+        assert!(!text.contains("aabbccddeeff"));
+        assert!(!text.contains("112233445566"));
+        assert_eq!(strict.get("client_mac"), Some(&"<redacted>".to_string()));
+        assert_eq!(strict.get("bssid"), Some(&"<redacted>".to_string()));
+        assert_eq!(strict.get("segment_size"), Some(&"1500".to_string()));
+    }
+
+    #[test]
     fn event_field_merge_includes_dst_ip() {
         let scope = ScopeId::session((1, 443), (2, 80));
         let dst_idx = resolve_metric_path(

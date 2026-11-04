@@ -63,13 +63,14 @@ fn stub_device_unreachable_rules() -> Vec<RuleInstance> {
         correlates: Box::new([]),
         branches: None,
         body: Box::new([Intent::InferCause {
-            cause: CauseKind::new("DeviceDown"),
+            cause: CauseKind::new("PhysicalLinkAbsent"),
             target: MetricPath::new("ev.target"),
             weight: Weight::new(100).expect("valid weight"),
             evidence: Box::new([Symbol::new("ev")]),
+            evidence_state: Box::new([airpulse_dsl_types::EvidenceState::Present]),
             provenance_key: ProvKey {
                 rule: RuleId::new("stub_device_unreachable_evidence"),
-                cause: CauseKind::new("DeviceDown"),
+                cause: CauseKind::new("PhysicalLinkAbsent"),
                 target_expr_hash: 0x5f0d_11e5,
             },
             evidence_pii: Box::new([]),
@@ -82,7 +83,7 @@ fn stub_device_unreachable_rules() -> Vec<RuleInstance> {
         scope: ScopeType::Global,
         anchor: AnchorSpec {
             binding: Symbol::new("c"),
-            source: AnchorSource::Cause(CauseKind::new("DeviceDown")),
+            source: AnchorSource::Cause(CauseKind::new("PhysicalLinkAbsent")),
             predicate: Predicate {
                 ops: Box::new([
                     PredOp::LoadCauseField {

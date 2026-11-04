@@ -7,4 +7,4 @@
 //! interpreter lives in [`nfdl_bytecode::BytecodeVm`] (re-exported via
 //! [`crate::bytecode`]).
 
-pub use nfdl_vm::{ParserContext, VmError, VmState};
+pub use nfdl_vm::{DatagramCoverage, ParserContext, VmError, VmState};

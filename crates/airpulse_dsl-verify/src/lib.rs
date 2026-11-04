@@ -22,8 +22,8 @@ use airpulse_dsl_syntax::ast::{
 };
 use airpulse_dsl_syntax::{load_ruleset, parse_ruleset};
 use airpulse_dsl_types::{
-    ActionKind, Capability, CauseKind, DurationMs, EventType, MetricPath, ProblemKind, RuleId,
-    ScopeType, Severity, Weight, stable_hash_u64, stable_string_i64,
+    ActionKind, Capability, CauseKind, DurationMs, EventType, EvidenceState, MetricPath,
+    ProblemKind, RuleId, ScopeType, Severity, Weight, stable_string_i64,
 };
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use ndsl_diag::{DiagBuffer, Diagnostic, Span};
@@ -140,6 +140,11 @@ pub fn verify_path_with_config(
 ) -> Result<VerifiedProgram, DiagBuffer> {
     let loaded = load_ruleset(path)?;
     let ast = loaded.parse()?;
+    // A child include that failed is coverage=partial. The entry rules parsed,
+    // and the caller must see the diagnostic instead of a clean image.
+    if loaded.diagnostics.has_errors() {
+        return Err(loaded.diagnostics);
+    }
     verify_with_config(&ast, config)
 }
 
@@ -607,48 +612,44 @@ fn phase05_scope_target(ruleset: &Ruleset<'_>, diags: &mut DiagBuffer) {
         gather_rule_statements(rule, &mut stmts);
         for stmt in stmts {
             match stmt {
-                Stmt::Infer(infer) => {
-                    let target_scope =
-                        infer_target_scope_from_infer(infer, &env).unwrap_or(rule_scope);
-                    if !rule_scope.is_subsumed_by(target_scope) {
-                        err(
-                            diags,
-                            "ADGL0210",
-                            "target scope not compatible with rule scope",
-                            infer.span,
-                        );
-                    }
-                    if let Some(schema) = resolve_cause(infer.cause.name) {
-                        if !schema.valid_scopes.contains(&target_scope) {
+                Stmt::Infer(infer) => match infer_target_scope_from_infer(infer, &env) {
+                    Some(target_scope) => {
+                        if !rule_scope.is_subsumed_by(target_scope) {
                             err(
                                 diags,
-                                "ADGL0211",
-                                "cause is invalid for target scope",
+                                "ADGL0210",
+                                "target scope not compatible with rule scope",
                                 infer.span,
                             );
                         }
-                    }
-                }
-                Stmt::Emit(emit) => {
-                    let target_scope =
-                        infer_target_scope_from_emit(emit, &env).unwrap_or(rule_scope);
-                    if !rule_scope.is_subsumed_by(target_scope) {
-                        err(
-                            diags,
-                            "ADGL0210",
-                            "target scope not compatible with rule scope",
-                            emit.span,
-                        );
-                    }
-                    if let Some(schema) = resolve_problem(emit.problem.name) {
-                        if !schema.valid_scopes.contains(&target_scope) {
-                            err(
-                                diags,
-                                "ADGL0212",
-                                "problem is invalid for target scope",
-                                emit.span,
-                            );
+                        if let Some(schema) = resolve_cause(infer.cause.name) {
+                            if !schema.valid_scopes.contains(&target_scope) {
+                                err(
+                                    diags,
+                                    "ADGL0211",
+                                    "cause is invalid for target scope",
+                                    infer.span,
+                                );
+                            }
                         }
+                    }
+                    None => {
+                        err(diags, "ADGL0210", "target scope is absent", infer.span);
+                    }
+                },
+                Stmt::Emit(emit) => {
+                    let explicit = emit
+                        .fields
+                        .iter()
+                        .any(|field| matches!(field, EmitField::Target(_, _)));
+                    match infer_target_scope_from_emit(emit, &env) {
+                        Some(target_scope) => {
+                            check_emit_target(emit, rule_scope, target_scope, diags);
+                        }
+                        None if explicit => {
+                            err(diags, "ADGL0210", "target scope is absent", emit.span);
+                        }
+                        None => check_emit_target(emit, rule_scope, rule_scope, diags),
                     }
                 }
                 Stmt::Action(_) => {}
@@ -1150,23 +1151,26 @@ fn lower_rule(
 
     let mut unconditional = Vec::new();
     for stmt in body {
-        if let Some(intent) = lower_stmt(stmt, env, &id, scope, state, diags) {
+        if let Some(intent) = lower_stmt(stmt, env, &id, scope, state, &[], diags) {
             unconditional.extend(intent);
         }
     }
 
     let branches = if let Some(if_else) = if_else {
         let cond = compile_predicate(&if_else.condition, env, diags);
+        let then_guards = guard_states(&if_else.condition, false);
+        let else_guards = guard_states(&if_else.condition, true);
         let mut then_body = Vec::new();
         for stmt in &if_else.then_body {
-            if let Some(intent) = lower_stmt(stmt, env, &id, scope, state, diags) {
+            if let Some(intent) = lower_stmt(stmt, env, &id, scope, state, &then_guards, diags) {
                 then_body.extend(intent);
             }
         }
         let mut else_intents = Vec::new();
         if let Some(else_body) = &if_else.else_body {
             for stmt in else_body {
-                if let Some(intent) = lower_stmt(stmt, env, &id, scope, state, diags) {
+                if let Some(intent) = lower_stmt(stmt, env, &id, scope, state, &else_guards, diags)
+                {
                     else_intents.extend(intent);
                 }
             }
@@ -1299,16 +1303,102 @@ fn lower_correlate(
     })
 }
 
+fn check_emit_target(
+    emit: &EmitStmt<'_>,
+    rule_scope: ScopeType,
+    target_scope: ScopeType,
+    diags: &mut DiagBuffer,
+) {
+    if !rule_scope.is_subsumed_by(target_scope) {
+        err(
+            diags,
+            "ADGL0210",
+            "target scope not compatible with rule scope",
+            emit.span,
+        );
+    }
+    if let Some(schema) = resolve_problem(emit.problem.name) {
+        if !schema.valid_scopes.contains(&target_scope) {
+            err(
+                diags,
+                "ADGL0212",
+                "problem is invalid for target scope",
+                emit.span,
+            );
+        }
+    }
+}
+
+fn guard_states<'a>(expr: &'a Expr<'a>, invert: bool) -> Vec<(&'a str, EvidenceState)> {
+    let mut out = Vec::new();
+    collect_guard_states(expr, invert, &mut out);
+    out
+}
+
+fn collect_guard_states<'a>(
+    expr: &'a Expr<'a>,
+    invert: bool,
+    out: &mut Vec<(&'a str, EvidenceState)>,
+) {
+    match &expr.kind {
+        ExprKind::Present(id) => out.push((
+            id.name,
+            if invert {
+                EvidenceState::Absent
+            } else {
+                EvidenceState::Present
+            },
+        )),
+        ExprKind::Absent(id) => out.push((
+            id.name,
+            if invert {
+                EvidenceState::Present
+            } else {
+                EvidenceState::Absent
+            },
+        )),
+        ExprKind::Unary { expr, .. } => collect_guard_states(expr, invert, out),
+        ExprKind::Binary { left, right, .. } => {
+            collect_guard_states(left, invert, out);
+            collect_guard_states(right, invert, out);
+        }
+        ExprKind::Field { base, .. } => collect_guard_states(base, invert, out),
+        ExprKind::Call { callee, args } => {
+            collect_guard_states(callee, invert, out);
+            for arg in args {
+                collect_guard_states(arg, invert, out);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            collect_guard_states(base, invert, out);
+            collect_guard_states(index, invert, out);
+        }
+        _ => {}
+    }
+}
+
+fn scope_type_token(scope: ScopeType) -> &'static str {
+    match scope {
+        ScopeType::Session => "session",
+        ScopeType::Port => "port",
+        ScopeType::ClientMac => "client_mac",
+        ScopeType::Vlan => "vlan",
+        ScopeType::AccessPoint => "access_point",
+        ScopeType::Global => "global",
+    }
+}
+
 fn lower_stmt(
     stmt: &Stmt<'_>,
     env: &RuleEnv,
     rule_id: &RuleId,
     rule_scope: ScopeType,
     state: &VerifyState,
+    guards: &[(&str, EvidenceState)],
     diags: &mut DiagBuffer,
 ) -> Option<Vec<Intent>> {
     match stmt {
-        Stmt::Infer(i) => lower_infer(i, env, rule_id, state, diags).map(|it| vec![it]),
+        Stmt::Infer(i) => lower_infer(i, env, rule_id, state, guards, diags).map(|it| vec![it]),
         Stmt::Emit(e) => lower_emit(e, env, state, rule_scope, diags).map(|it| vec![it]),
         Stmt::Action(a) => {
             lower_action(a, env, diags).map(|v| if v.is_empty() { Vec::new() } else { v })
@@ -1318,9 +1408,10 @@ fn lower_stmt(
 
 fn lower_infer(
     infer: &InferStmt<'_>,
-    _env: &RuleEnv,
+    env: &RuleEnv,
     rule_id: &RuleId,
     state: &VerifyState,
+    guards: &[(&str, EvidenceState)],
     diags: &mut DiagBuffer,
 ) -> Option<Intent> {
     let Some(target) = infer.fields.iter().find_map(|f| match f {
@@ -1366,6 +1457,26 @@ fn lower_infer(
             _ => None,
         })
         .unwrap_or_else(|| Box::new([]));
+    if evidence.is_empty() {
+        err(
+            diags,
+            "ADGL0101",
+            "infer requires non-empty evidence",
+            infer.span,
+        );
+        return None;
+    }
+    let evidence_state = evidence
+        .iter()
+        .map(|sym| {
+            guards
+                .iter()
+                .find(|(name, _)| *name == sym.as_str())
+                .map(|(_, state)| *state)
+                .unwrap_or(EvidenceState::Present)
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     let mut pii = BTreeSet::new();
     for sym in evidence.iter() {
         let prefix = format!("{}.", sym.as_str());
@@ -1375,16 +1486,33 @@ fn lower_infer(
             }
         }
     }
+    let cause = CauseKind::new(infer.cause.name.to_string());
+    let scope_token = infer_target_scope_from_infer(infer, env)
+        .map(scope_type_token)
+        .unwrap_or("absent");
+    let tagged_owned: Vec<(String, EvidenceState)> = evidence
+        .iter()
+        .zip(evidence_state.iter())
+        .map(|(sym, state)| (sym.as_str().to_string(), *state))
+        .collect();
+    let tagged: Vec<(&str, EvidenceState)> = tagged_owned
+        .iter()
+        .map(|(name, state)| (name.as_str(), *state))
+        .collect();
+    let provenance_key = ProvKey::derive(
+        rule_id.clone(),
+        cause.clone(),
+        scope_token,
+        target.as_str(),
+        &tagged,
+    );
     Some(Intent::InferCause {
-        cause: CauseKind::new(infer.cause.name.to_string()),
+        cause,
         target: target.clone(),
         weight,
         evidence,
-        provenance_key: ProvKey {
-            rule: rule_id.clone(),
-            cause: CauseKind::new(infer.cause.name.to_string()),
-            target_expr_hash: stable_hash_u64(target.as_str().as_bytes()),
-        },
+        evidence_state,
+        provenance_key,
         evidence_pii: pii.into_iter().collect::<Vec<_>>().into_boxed_slice(),
     })
 }
@@ -2094,6 +2222,19 @@ fn infer_target_scope_from_emit(stmt: &EmitStmt<'_>, env: &RuleEnv) -> Option<Sc
     })
 }
 
+/// A binding `.target` is proven when the catalog row has one scope, or when
+/// the rule's own scope is one of several valid scopes. A missing expression
+/// is not replaced by the rule scope.
+fn proven_binding_target_scope(valid: &[ScopeType], rule_scope: ScopeType) -> Option<ScopeType> {
+    if valid.len() == 1 {
+        Some(valid[0])
+    } else if valid.contains(&rule_scope) {
+        Some(rule_scope)
+    } else {
+        None
+    }
+}
+
 fn infer_target_scope_expr(expr: &Expr<'_>, env: &RuleEnv) -> Option<ScopeType> {
     match &expr.kind {
         ExprKind::Field { base, field } => {
@@ -2113,11 +2254,7 @@ fn infer_target_scope_expr(expr: &Expr<'_>, env: &RuleEnv) -> Option<ScopeType> 
                 BindingTy::Cause(cause) => {
                     if field.name == "target" {
                         resolve_cause(cause.as_str()).and_then(|c| {
-                            if c.valid_scopes.len() == 1 {
-                                Some(c.valid_scopes[0])
-                            } else {
-                                None
-                            }
+                            proven_binding_target_scope(&c.valid_scopes, env.rule_scope)
                         })
                     } else {
                         None
@@ -2126,11 +2263,7 @@ fn infer_target_scope_expr(expr: &Expr<'_>, env: &RuleEnv) -> Option<ScopeType> 
                 BindingTy::Problem(problem) => {
                     if field.name == "target" {
                         resolve_problem(problem.as_str()).and_then(|p| {
-                            if p.valid_scopes.len() == 1 {
-                                Some(p.valid_scopes[0])
-                            } else {
-                                None
-                            }
+                            proven_binding_target_scope(&p.valid_scopes, env.rule_scope)
                         })
                     } else {
                         None

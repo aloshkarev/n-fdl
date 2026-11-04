@@ -2,7 +2,8 @@
 //! semantics of `docs/idea/spec/03-semantics.md` §3.3–3.6.
 
 use airpulse_dsl_types::{
-    ActionKind, CauseKind, MetricPath, ProblemKind, RuleId, SarifId, Severity, Weight,
+    ActionKind, CauseKind, EvidenceState, MetricPath, ProblemKind, RuleId, SarifId, Severity,
+    Weight, stable_hash_u64,
 };
 
 use crate::symbol::Symbol;
@@ -23,6 +24,41 @@ pub struct ProvKey {
     /// Hash of the compiled `target` expression (stable across reloads of the
     /// same rule text).
     pub target_expr_hash: u64,
+}
+
+impl ProvKey {
+    /// Derives the static dedup prefix from kind, scope, target, and tagged
+    /// evidence. A missing correlate (`Absent`) does not share this hash with
+    /// the same infer that observed the correlate.
+    #[must_use]
+    pub fn derive(
+        rule: RuleId,
+        cause: CauseKind,
+        scope: &str,
+        target: &str,
+        evidence: &[(&str, EvidenceState)],
+    ) -> Self {
+        let mut raw = Vec::new();
+        raw.extend_from_slice(cause.as_str().as_bytes());
+        raw.push(0);
+        raw.extend_from_slice(scope.as_bytes());
+        raw.push(0);
+        raw.extend_from_slice(target.as_bytes());
+        for (name, state) in evidence {
+            raw.push(0);
+            raw.extend_from_slice(name.as_bytes());
+            raw.push(match state {
+                EvidenceState::Present => 1,
+                EvidenceState::Absent => 2,
+                EvidenceState::Partial => 3,
+            });
+        }
+        Self {
+            rule,
+            cause,
+            target_expr_hash: stable_hash_u64(&raw),
+        }
+    }
 }
 
 /// One effect directive dispatched over the GraphStore
@@ -46,6 +82,9 @@ pub enum Intent {
         weight: Weight,
         /// Evidence binding refs, e.g. `[rtx, ptb]`.
         evidence: Box<[Symbol]>,
+        /// Present, absent, or partial tag for each [`Self::InferCause::evidence`]
+        /// entry, in the same order.
+        evidence_state: Box<[EvidenceState]>,
         /// Static provenance-dedup prefix (`03` §3.3).
         provenance_key: ProvKey,
         /// PII field paths collected by the verifier from the evidence

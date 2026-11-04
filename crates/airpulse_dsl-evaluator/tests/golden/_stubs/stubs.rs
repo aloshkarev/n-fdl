@@ -6,7 +6,7 @@
 //! emitter must live in the same ruleset". Per the Phase 1 plan decision
 //! ("stubs for 07/08"), this module hand-codes that emitter as Rust
 //! constructor code: a synthetic `net.device_unreachable` event drives an
-//! evidence rule (`infer Cause(DeviceDown) +100`), whose decision verdict
+//! evidence rule (`infer Cause(PhysicalLinkAbsent) +100`), whose decision verdict
 //! emits `Problem(DeviceUnreachable)` at the event's target — which is what
 //! `suppress_downstream` reacts to (`03` §3.5 ProblemEmission).
 
@@ -27,7 +27,7 @@ fn slot(i: u8) -> SlotIdx {
 }
 
 /// Evidence: `anchor ev: event(net.device_unreachable)` →
-/// `infer Cause(DeviceDown) { target: ev.target, weight: +100 }`.
+/// `infer Cause(PhysicalLinkAbsent) { target: ev.target, weight: +100 }`.
 fn device_unreachable_evidence() -> RuleInstance {
     RuleInstance {
         id: RuleId::new("stub_device_unreachable_evidence"),
@@ -41,13 +41,14 @@ fn device_unreachable_evidence() -> RuleInstance {
         correlates: Box::new([]),
         branches: None,
         body: Box::new([Intent::InferCause {
-            cause: CauseKind::new("DeviceDown"),
+            cause: CauseKind::new("PhysicalLinkAbsent"),
             target: MetricPath::new("ev.target"),
             weight: Weight::new(100).expect("weight in domain"),
             evidence: Box::new([Symbol::new("ev")]),
+            evidence_state: Box::new([airpulse_dsl_types::EvidenceState::Present]),
             provenance_key: ProvKey {
                 rule: RuleId::new("stub_device_unreachable_evidence"),
-                cause: CauseKind::new("DeviceDown"),
+                cause: CauseKind::new("PhysicalLinkAbsent"),
                 target_expr_hash: 0x5f0d_11e5,
             },
             evidence_pii: Box::new([]),
@@ -56,7 +57,7 @@ fn device_unreachable_evidence() -> RuleInstance {
     }
 }
 
-/// Decision: `anchor c: Cause(DeviceDown) { c.confidence >= 80 }` →
+/// Decision: `anchor c: Cause(PhysicalLinkAbsent) { c.confidence >= 80 }` →
 /// `emit Problem(DeviceUnreachable) { target: c.target, severity: High }`.
 fn device_unreachable_verdict() -> RuleInstance {
     RuleInstance {
@@ -65,7 +66,7 @@ fn device_unreachable_verdict() -> RuleInstance {
         scope: ScopeType::Global,
         anchor: AnchorSpec {
             binding: Symbol::new("c"),
-            source: AnchorSource::Cause(CauseKind::new("DeviceDown")),
+            source: AnchorSource::Cause(CauseKind::new("PhysicalLinkAbsent")),
             predicate: Predicate {
                 ops: Box::new([
                     PredOp::LoadCauseField {

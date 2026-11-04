@@ -108,6 +108,18 @@ impl WaitQueue {
         self.heap.peek().map(|Reverse(p)| p)
     }
 
+    /// Anchor ids whose wait has not closed (`upper_bound >= wm`).
+    ///
+    /// Ring GC keeps these events. `idle_timeout` does not evict them.
+    #[must_use]
+    pub fn unexpired_anchor_ids(&self, wm: EventTime) -> Vec<airpulse_dsl_types::EventId> {
+        self.heap
+            .iter()
+            .filter(|Reverse(pending)| pending.upper_bound >= wm)
+            .map(|Reverse(pending)| pending.anchor_event)
+            .collect()
+    }
+
     /// Pops every match whose window has closed: `upper_bound < wm`, i.e.
     /// resume **strictly** when `wm > upper` (`08` §3.2 resume loop; the
     /// boundary `wm == upper` does *not* pop — `08` §3.1 shows it cannot

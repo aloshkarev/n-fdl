@@ -51,7 +51,8 @@ impl Span {
     }
 }
 
-/// A single diagnostic. `code` is a stable identifier (e.g. `NFD001`).
+/// A single diagnostic. `code` is a stable diagnostic identifier (e.g. `NFD001`).
+/// It is not a catalog cause id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -87,21 +88,101 @@ impl Diagnostic {
     }
 }
 
+/// Maximum diagnostics kept before one overflow record.
+pub const MAX_DIAGNOSTICS: usize = 256;
+/// Maximum bytes of diagnostic code and message text kept before overflow.
+pub const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+/// Overflow diagnostic. This code is not a cause id.
+pub const DIAGNOSTIC_OVERFLOW_CODE: &str = "DIAG9001";
+
 /// A simple in-memory diagnostic collector.
-#[derive(Debug, Default, Clone)]
+///
+/// A full buffer keeps the diagnostics that fit, then one [`DIAGNOSTIC_OVERFLOW_CODE`]
+/// record naming the cap, what was kept, and what was dropped. `code` on every
+/// record is a diagnostic id, not a catalog cause.
+#[derive(Debug, Clone)]
 pub struct DiagBuffer {
     diags: Vec<Diagnostic>,
+    bytes: usize,
+    dropped: usize,
+    overflowed: bool,
+}
+
+impl Default for DiagBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiagBuffer {
     pub fn new() -> Self {
-        Self { diags: Vec::new() }
+        Self {
+            diags: Vec::new(),
+            bytes: 0,
+            dropped: 0,
+            overflowed: false,
+        }
     }
     pub fn push(&mut self, d: Diagnostic) {
+        if self.overflowed {
+            self.dropped += 1;
+            self.rewrite_overflow();
+            return;
+        }
+        let add = diagnostic_bytes(&d);
+        let over_count = self.diags.len() >= MAX_DIAGNOSTICS;
+        let over_bytes = self.bytes.saturating_add(add) > MAX_DIAGNOSTIC_BYTES;
+        if over_count || over_bytes {
+            self.dropped += 1;
+            self.overflowed = true;
+            let cap = if over_count {
+                "diagnostics"
+            } else {
+                "diagnostic-bytes"
+            };
+            self.push_overflow(cap);
+            return;
+        }
+        self.bytes += add;
         self.diags.push(d);
     }
     pub fn extend(&mut self, other: impl IntoIterator<Item = Diagnostic>) {
-        self.diags.extend(other);
+        for d in other {
+            self.push(d);
+        }
+    }
+
+    fn push_overflow(&mut self, cap: &'static str) {
+        let kept = self.diags.len();
+        let overflow = Diagnostic::error(
+            DIAGNOSTIC_OVERFLOW_CODE,
+            overflow_message(cap, kept, self.dropped),
+            Span::unknown(),
+        );
+        // The overflow record is the one extra diagnostic. Do not push it
+        // through [`Self::push`] or the cap would recurse.
+        self.bytes += diagnostic_bytes(&overflow);
+        self.diags.push(overflow);
+    }
+
+    fn rewrite_overflow(&mut self) {
+        let kept = self.diags.len().saturating_sub(1);
+        let dropped = self.dropped;
+        let Some(last) = self.diags.last_mut() else {
+            return;
+        };
+        if last.code != DIAGNOSTIC_OVERFLOW_CODE {
+            return;
+        }
+        let cap = if last.message.contains("cap=diagnostic-bytes") {
+            "diagnostic-bytes"
+        } else {
+            "diagnostics"
+        };
+        let previous = diagnostic_bytes(last);
+        last.message = overflow_message(cap, kept, dropped);
+        let next = diagnostic_bytes(last);
+        self.bytes = self.bytes.saturating_sub(previous).saturating_add(next);
     }
     pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
         self.diags.iter()
@@ -146,6 +227,23 @@ impl DiagBuffer {
     pub fn to_sarif_with_options(&self, src: &str, uri: &str, options: SarifOptions<'_>) -> String {
         crate::to_sarif_with_options(&self.diags, src, uri, options)
     }
+}
+
+impl IntoIterator for DiagBuffer {
+    type Item = Diagnostic;
+    type IntoIter = std::vec::IntoIter<Diagnostic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.diags.into_iter()
+    }
+}
+
+fn diagnostic_bytes(d: &Diagnostic) -> usize {
+    d.code.len() + d.message.len()
+}
+
+fn overflow_message(cap: &str, kept: usize, dropped: usize) -> String {
+    format!("coverage=partial cap={cap} kept={kept} dropped={dropped}")
 }
 
 pub(crate) fn line_col(src: &str, byte_off: usize) -> (usize, usize) {
@@ -209,5 +307,41 @@ mod tests {
         buf.push(Diagnostic::error("NFD001", "y", Span::unknown()));
         assert!(buf.has_errors());
         assert_eq!(buf.len(), 2);
+    }
+
+    #[test]
+    fn one_past_the_count_cap_is_one_overflow_diagnostic() {
+        let mut buf = DiagBuffer::new();
+        for i in 0..(MAX_DIAGNOSTICS + 3) {
+            buf.push(Diagnostic::warning(
+                "NFD0001",
+                format!("n{i}"),
+                Span::unknown(),
+            ));
+        }
+        assert_eq!(buf.len(), MAX_DIAGNOSTICS + 1);
+        let last = buf.iter().last().expect("overflow");
+        assert_eq!(last.code, DIAGNOSTIC_OVERFLOW_CODE);
+        assert!(last.code != "PhysicalLinkAbsent");
+        assert!(last.message.contains("cap=diagnostics"));
+        assert!(last.message.contains("kept=256"));
+        assert!(last.message.contains("dropped=3"));
+        assert!(last.message.contains("coverage=partial"));
+    }
+
+    #[test]
+    fn one_past_the_byte_cap_names_the_cap() {
+        let mut buf = DiagBuffer::new();
+        buf.push(Diagnostic::error(
+            "NFD0001",
+            "x".repeat(MAX_DIAGNOSTIC_BYTES),
+            Span::unknown(),
+        ));
+        assert_eq!(buf.len(), 1);
+        let only = buf.iter().next().expect("overflow");
+        assert_eq!(only.code, DIAGNOSTIC_OVERFLOW_CODE);
+        assert!(only.message.contains("cap=diagnostic-bytes"));
+        assert!(only.message.contains("kept=0"));
+        assert!(only.message.contains("dropped=1"));
     }
 }

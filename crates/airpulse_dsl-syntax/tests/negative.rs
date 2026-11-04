@@ -149,3 +149,24 @@ ruleset "x" {
     assert!(rendered.contains("ADGL0106"), "{rendered}");
     assert!(rendered.contains("unclosed block comment"), "{rendered}");
 }
+
+#[test]
+fn rejects_infer_without_target_or_evidence() {
+    let src = r#"
+ruleset "x" {
+  version = "1.0"
+  evidence r {
+    scope: Session
+    anchor a: event(tcp.retransmission_burst)
+    infer Cause(X) { weight: +40 }
+  }
+}
+"#;
+    let err = parse_ruleset(src).expect_err("empty infer must fail");
+    let rendered = err.render(src, "empty_infer.adgl");
+    assert!(rendered.contains("ADGL0101"), "{rendered}");
+    assert!(
+        rendered.contains("infer requires a target and non-empty evidence"),
+        "{rendered}"
+    );
+}

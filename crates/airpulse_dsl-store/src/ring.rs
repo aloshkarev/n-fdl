@@ -133,17 +133,23 @@ impl RingBuffer {
     /// (`05` §3.1 / `08` §6): `max_lookback > max(back, forward) + slack`
     /// ⇒ no unexpired `PendingMatch` references an evicted event.
     pub fn gc(&mut self, watermark: EventTime, max_lookback: DurationMs) -> usize {
+        self.gc_keeping(watermark, max_lookback, &std::collections::HashSet::new())
+    }
+
+    /// Like [`Self::gc`], but an event id in `keep` stays even when it is
+    /// older than the lookback. Callers pass anchors still named by an
+    /// unexpired wait.
+    pub fn gc_keeping(
+        &mut self,
+        watermark: EventTime,
+        max_lookback: DurationMs,
+        keep: &std::collections::HashSet<airpulse_dsl_types::EventId>,
+    ) -> usize {
         let cutoff = watermark.sub(max_lookback);
-        let mut evicted = 0;
-        while let Some(front) = self.buf.front() {
-            if front.time < cutoff {
-                self.buf.pop_front();
-                evicted += 1;
-            } else {
-                break;
-            }
-        }
-        evicted
+        let before = self.buf.len();
+        self.buf
+            .retain(|event| event.time >= cutoff || keep.contains(&event.id));
+        before - self.buf.len()
     }
 
     /// All buffered events in time order (diagnostics/test support).
