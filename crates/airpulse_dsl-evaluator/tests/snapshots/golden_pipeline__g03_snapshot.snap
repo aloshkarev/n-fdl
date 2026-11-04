@@ -1,5 +1,6 @@
 ---
 source: crates/airpulse_dsl-evaluator/tests/golden_pipeline.rs
+assertion_line: 288
 expression: snap
 ---
 Snapshot {
@@ -93,4 +94,5 @@ Snapshot {
             ),
         },
     ],
+    coverage: [],
 }

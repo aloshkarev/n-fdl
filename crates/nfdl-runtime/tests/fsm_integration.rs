@@ -1,22 +1,24 @@
-use nfdl_runtime::{parse_and_run, parse_and_run_with_data};
+use nfdl_runtime::{RuntimeError, parse_and_run, parse_and_run_with_data};
 
 #[test]
 fn full_parse_and_fsm_integration() {
     let src = include_str!("../../../docs/examples/radius.nfdl");
-    let (proto, events) = parse_and_run(src).expect("run");
+    let proto = nfdl_syntax::Parser::new(src)
+        .parse_protocol()
+        .expect("parse");
     assert_eq!(proto.state_machines.len(), 1);
     assert!(!proto.state_machines[0].states.is_empty());
 
-    // Should have produced at least message + transition or emit events
-    assert!(!events.is_empty());
-
-    // Look for diagnostic or emit from actions
-    let has_action_event = events.iter().any(|e| {
-        matches!(e, nfdl_runtime::Event::Emit { .. })
-            || matches!(e, nfdl_runtime::Event::Diagnostic { .. })
-            || matches!(e, nfdl_runtime::Event::FsmTransition { .. })
-    });
-    assert!(has_action_event || true, "EFSM should emit events");
+    // authenticator: bytes[16] does not fit the 8-byte slot, so the sample run
+    // is partial coverage and not an FSM cause.
+    match parse_and_run(src) {
+        Err(RuntimeError::Partial { cap, kept, dropped }) => {
+            assert_eq!(cap, "short-read");
+            assert_eq!(kept, 4);
+            assert_eq!(dropped, 16);
+        }
+        other => panic!("expected short-read, got {other:?}"),
+    }
 }
 
 #[test]
@@ -28,34 +30,17 @@ fn full_context_from_fields_affects_fsm() {
     data.extend_from_slice(&[0xAA; 16]);
     data.extend_from_slice(&[0, 2]);
 
-    let (_proto, ctx, final_state, events) =
-        parse_and_run_with_data(src, &data).expect("run with data");
-    println!(
-        "TASK3 code={:?} final_state={}",
-        ctx.get("code"),
-        final_state
-    );
-
-    // Verify integrated context from bytecode
-    assert!(ctx.contains_key("code"));
-    let code_val = *ctx.get("code").unwrap_or(&0);
-    assert!(code_val == 1 || code_val > 0);
-
-    assert!(ctx.contains_key("identifier") || ctx.contains_key("length"));
-    assert!(ctx.contains_key("__current_offset") || ctx.len() > 2);
-
-    // END-TO-END: state machine transition using bytecode ctx
-    assert_eq!(
-        final_state, "PENDING",
-        "code==1 should transition IDLE -> PENDING"
-    );
-
-    // Should have events from EFSM (FsmTransition or SET diagnostic)
-    let has_fsm_event = events.iter().any(|e| {
-        matches!(e, nfdl_runtime::Event::FsmTransition { .. })
-            || matches!(e, nfdl_runtime::Event::Diagnostic { code, .. } if code == "SET")
-    });
-    assert!(has_fsm_event || !events.is_empty());
+    match parse_and_run_with_data(src, &data) {
+        Err(RuntimeError::Partial { cap, kept, dropped }) => {
+            assert_eq!(cap, "short-read");
+            assert_eq!(kept, 4, "header bytes stay consumed");
+            assert_eq!(
+                dropped, 16,
+                "authenticator does not become a present prefix"
+            );
+        }
+        other => panic!("expected short-read, got {other:?}"),
+    }
 }
 #[test]
 fn efsm_executes_set_and_emit() {

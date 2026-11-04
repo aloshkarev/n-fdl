@@ -336,6 +336,7 @@ fn snapshot_with_evidence(fields: BTreeMap<String, String>) -> Snapshot {
             superseded: false,
         }],
         audit: Vec::new(),
+        coverage: Vec::new(),
     }
 }
 

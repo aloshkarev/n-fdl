@@ -39,7 +39,7 @@ use airpulse_dsl_ir::{
 };
 use airpulse_dsl_store::{
     AmbiguityNode, AmbiguityState, EdgeEndpoint, EventNode, EvidenceEdge, EvidenceEdgeKind,
-    GraphStore, Limits, ProblemNode, RuntimeProvKey, window_id,
+    GraphStore, Limits, ProblemNode, RuntimeProvKey, StoreDiagnostic, window_id,
 };
 use airpulse_dsl_types::{
     ActionKind, CauseKind, Confidence, DurationMs, EventTime, EventType, EvidenceState, MetricPath,
@@ -48,6 +48,9 @@ use airpulse_dsl_types::{
 
 use crate::binding::{Binding, Bound, CauseSnapshot, ProblemSnapshot};
 use crate::diag::EngineDiagnostic;
+
+/// Same retained-row cap as `ndsl-diag`'s `MAX_DIAGNOSTICS`.
+const MAX_RETAINED_ROWS: usize = 256;
 use crate::evidence::collect_problem_evidence;
 use crate::extract::{CauseView, ProblemView, Snapshot};
 use crate::interner::ScopeInterner;
@@ -123,6 +126,8 @@ pub struct Engine<'img, T, S> {
     late_side_output: Vec<EventNode>,
     /// Offline resolved-absent correlate windows for late-evidence audit.
     resolved_absent: Vec<ResolvedAbsent>,
+    /// Named cap hits. Merged by `(scope, cap)` for the snapshot.
+    coverage: Vec<crate::CoverageRecord>,
     /// Live per-source watermark / idle tracking (`08` §2.3).
     sources: HashMap<ScopeId, SourceWm>,
     /// Wall-clock used for idle-source detection (live). Advanced by
@@ -161,6 +166,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             resumed: 0,
             late_side_output: Vec::new(),
             resolved_absent: Vec::new(),
+            coverage: Vec::new(),
             sources: HashMap::new(),
             wall_clock: EventTime::from_millis(i64::MIN),
         }
@@ -304,10 +310,64 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         causes.sort_by(|a, b| (a.scope, &a.kind, a.target).cmp(&(b.scope, &b.kind, b.target)));
         // Problems: scopes already in sorted (BTreeSet) order; per-scope
         // emission (append) order preserved.
+        let mut coverage = self.coverage.clone();
+        coverage.sort_by(|a, b| (a.scope, a.cap).cmp(&(b.scope, b.cap)));
         Snapshot {
             causes,
             problems,
             audit: Vec::new(),
+            coverage,
+        }
+    }
+
+    /// Retains at most [`MAX_RETAINED_ROWS`] diagnostics. Further pushes
+    /// rewrite one `diagnostics` coverage record.
+    fn push_diagnostic(&mut self, diagnostic: EngineDiagnostic) {
+        if self.diagnostics.len() < MAX_RETAINED_ROWS {
+            self.diagnostics.push(diagnostic);
+        } else {
+            self.note_diagnostics_overflow();
+        }
+    }
+
+    fn push_resolved_absent(&mut self, row: ResolvedAbsent) {
+        if self.resolved_absent.len() < MAX_RETAINED_ROWS {
+            self.resolved_absent.push(row);
+        } else {
+            self.note_diagnostics_overflow();
+        }
+    }
+
+    fn push_late_event(&mut self, event: EventNode) {
+        if self.late_side_output.len() < MAX_RETAINED_ROWS {
+            self.late_side_output.push(event);
+        } else {
+            self.note_diagnostics_overflow();
+        }
+    }
+
+    fn note_diagnostics_overflow(&mut self) {
+        let kept =
+            self.diagnostics.len() + self.resolved_absent.len() + self.late_side_output.len();
+        self.note_partial(ScopeId::GLOBAL, "diagnostics", kept, 1);
+    }
+
+    /// Merges one cap hit. `dropped` accumulates. `kept` is the latest count.
+    fn note_partial(&mut self, scope: ScopeId, cap: &'static str, kept: usize, dropped: usize) {
+        if let Some(record) = self
+            .coverage
+            .iter_mut()
+            .find(|record| record.scope == scope && record.cap == cap)
+        {
+            record.kept = kept;
+            record.dropped += dropped;
+        } else {
+            self.coverage.push(crate::CoverageRecord {
+                scope,
+                cap,
+                kept,
+                dropped,
+            });
         }
     }
 
@@ -330,13 +390,13 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         if self.mode == RunMode::Live && is_late {
             let cutoff = prev_wm.sub(self.store.limits().allowed_lateness);
             if event.time <= cutoff {
-                self.diagnostics.push(EngineDiagnostic::LateEventDropped {
+                self.push_diagnostic(EngineDiagnostic::LateEventDropped {
                     scope,
                     event: event.id,
                     time: event.time,
                     wm: prev_wm,
                 });
-                self.late_side_output.push(event);
+                self.push_late_event(event);
                 return;
             }
             // Within allowed_lateness: fall through and accept.
@@ -352,7 +412,12 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         };
 
         if let Some(d) = self.store.push_event(event.clone()) {
-            self.diagnostics.push(EngineDiagnostic::Store(d));
+            if let StoreDiagnostic::RingBufferSpill { scope, .. } = &d {
+                let scope = *scope;
+                let kept = self.store.ring(scope).map(|ring| ring.len()).unwrap_or(0);
+                self.note_partial(scope, "ring-buffer", kept, 1);
+            }
+            self.push_diagnostic(EngineDiagnostic::Store(d));
         }
         self.resume_expired(wm);
         self.gc_sweep(wm);
@@ -405,7 +470,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 continue;
             }
             if event.time >= ra.lo && event.time <= ra.hi {
-                self.diagnostics.push(EngineDiagnostic::LateEvidence {
+                self.push_diagnostic(EngineDiagnostic::LateEvidence {
                     scope: event.scope,
                     rule: ra.rule.clone(),
                     event: event.id,
@@ -444,7 +509,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 WindowProof::SessionSpan { .. } => continue,
                 WindowProof::RuntimeCheck => continue,
             };
-            self.resolved_absent.push(ResolvedAbsent {
+            self.push_resolved_absent(ResolvedAbsent {
                 scope,
                 rule: rule.id.clone(),
                 event_type: event_type.clone(),
@@ -494,7 +559,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                 .ring(m.scope)
                 .and_then(|ring| ring.get(m.anchor_event).cloned());
             let Some(evt) = anchor_event else {
-                self.diagnostics.push(EngineDiagnostic::MissingAnchor {
+                self.push_diagnostic(EngineDiagnostic::MissingAnchor {
                     rule: m.rule.clone(),
                 });
                 continue;
@@ -503,7 +568,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             let Some(rule) = img.rules.iter().find(|r| r.id == m.rule) else {
                 // Only possible if the image changed under a live store —
                 // never silently drop the pending match.
-                self.diagnostics.push(EngineDiagnostic::RuleNotInImage {
+                self.push_diagnostic(EngineDiagnostic::RuleNotInImage {
                     rule: m.rule.clone(),
                 });
                 continue;
@@ -545,7 +610,12 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     scope,
                 };
                 if let Some(d) = self.store.suspend(pending) {
-                    self.diagnostics.push(EngineDiagnostic::Store(d));
+                    if let StoreDiagnostic::WaitQueueSpill { scope, .. } = &d {
+                        let scope = *scope;
+                        let kept = self.store.pending_len(scope);
+                        self.note_partial(scope, "wait-queue", kept, 1);
+                    }
+                    self.push_diagnostic(EngineDiagnostic::Store(d));
                 }
             } else {
                 // Backward-only (upper == wm) or late anchor → immediate.
@@ -578,8 +648,9 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         budget: &mut usize,
     ) {
         if *budget == 0 {
-            self.diagnostics
-                .push(EngineDiagnostic::RuleFiringsExceeded { scope });
+            let kept = self.store.limits().max_rule_firings_per_event;
+            self.note_partial(scope, "rule-firings", kept, 1);
+            self.push_diagnostic(EngineDiagnostic::RuleFiringsExceeded { scope });
             return;
         }
         *budget -= 1;
@@ -656,7 +727,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
                     )
                 }
                 WindowProof::RuntimeCheck => {
-                    self.diagnostics.push(EngineDiagnostic::RuntimeCheckWindow {
+                    self.push_diagnostic(EngineDiagnostic::RuntimeCheckWindow {
                         rule: rule.id.clone(),
                     });
                     bindings.push(Binding::Absent);
@@ -720,7 +791,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             // diagnostic per rule evaluation.
             let func = TopoFunc::from_idx(spec.topo.func_idx);
             if func.is_none() {
-                self.diagnostics.push(EngineDiagnostic::PredicateError {
+                self.push_diagnostic(EngineDiagnostic::PredicateError {
                     rule: rule.id.clone(),
                     error: crate::error::CorrelateError::UnknownTopoFunction {
                         func: spec.topo.func_idx.0,
@@ -815,7 +886,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         match eval_predicate(pred, &ctx) {
             Ok(t) => Some(t),
             Err(error) => {
-                self.diagnostics.push(EngineDiagnostic::PredicateError {
+                self.push_diagnostic(EngineDiagnostic::PredicateError {
                     rule: rule.id.clone(),
                     error,
                 });
@@ -1016,21 +1087,21 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         budget: &mut usize,
     ) {
         let Some(target) = self.resolve_target(rule, target_path, bindings) else {
-            self.diagnostics.push(EngineDiagnostic::UnresolvedTarget {
+            self.push_diagnostic(EngineDiagnostic::UnresolvedTarget {
                 rule: rule.id.clone(),
                 path: target_path.clone(),
             });
             return;
         };
         let Some(schema) = resolve_cause(cause.as_str()) else {
-            self.diagnostics.push(EngineDiagnostic::UnknownCause {
+            self.push_diagnostic(EngineDiagnostic::UnknownCause {
                 rule: rule.id.clone(),
                 kind: cause.clone(),
             });
             return;
         };
         if !schema.valid_scopes.contains(&target.scope_type()) {
-            self.diagnostics.push(EngineDiagnostic::CauseScopeRejected {
+            self.push_diagnostic(EngineDiagnostic::CauseScopeRejected {
                 rule: rule.id.clone(),
                 kind: cause.clone(),
                 target,
@@ -1038,7 +1109,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             return;
         }
         if evidence.is_empty() {
-            self.diagnostics.push(EngineDiagnostic::EmptyCauseEvidence {
+            self.push_diagnostic(EngineDiagnostic::EmptyCauseEvidence {
                 rule: rule.id.clone(),
                 kind: cause.clone(),
             });
@@ -1070,8 +1141,8 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             let exists = part.causes.contains_key(&(cause.clone(), target));
             if !exists && part.causes.len() >= max_causes {
                 drop(part);
-                self.diagnostics
-                    .push(EngineDiagnostic::CauseCapacity { scope });
+                self.note_partial(scope, "cause-capacity", max_causes, 1);
+                self.push_diagnostic(EngineDiagnostic::CauseCapacity { scope });
                 return;
             }
             if !part.try_insert_provenance(key.clone()) {
@@ -1178,7 +1249,8 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             let exists = part.causes.contains_key(&(cause.clone(), target));
             if !exists && part.causes.len() >= max_causes {
                 drop(part);
-                self.diagnostics.push(EngineDiagnostic::CauseCapacity {
+                self.note_partial(parent_scope, "cause-capacity", max_causes, 1);
+                self.push_diagnostic(EngineDiagnostic::CauseCapacity {
                     scope: parent_scope,
                 });
                 return;
@@ -1375,7 +1447,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
             Some(path) => match self.resolve_target(rule, path, bindings) {
                 Some(t) => t,
                 None => {
-                    self.diagnostics.push(EngineDiagnostic::UnresolvedTarget {
+                    self.push_diagnostic(EngineDiagnostic::UnresolvedTarget {
                         rule: rule.id.clone(),
                         path: path.clone(),
                     });
@@ -1501,7 +1573,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         scope: ScopeId,
     ) {
         let Some(target) = self.resolve_target(rule, target_path, bindings) else {
-            self.diagnostics.push(EngineDiagnostic::UnresolvedTarget {
+            self.push_diagnostic(EngineDiagnostic::UnresolvedTarget {
                 rule: rule.id.clone(),
                 path: target_path.clone(),
             });
@@ -1523,7 +1595,7 @@ impl<'img, T: TopologyProvider, S: ActionSink> Engine<'img, T, S> {
         scope: ScopeId,
     ) {
         let Some(target) = self.resolve_target(rule, target_path, bindings) else {
-            self.diagnostics.push(EngineDiagnostic::UnresolvedTarget {
+            self.push_diagnostic(EngineDiagnostic::UnresolvedTarget {
                 rule: rule.id.clone(),
                 path: target_path.clone(),
             });

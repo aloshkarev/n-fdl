@@ -1,30 +1,43 @@
 //! Full Fuzzing Target (parser + VM + reassembly)
 
-use nfdl_syntax::{Lexer, Parser};
 use nfdl_runtime::{BytecodeVm, Reassembler, protocol_to_bytecode};
+use nfdl_syntax::{Lexer, Parser};
 
 pub fn fuzz_all(data: &[u8]) {
-    if data.len() < 8 { return; }
-    
+    if data.len() < 8 {
+        return;
+    }
+
     // Fuzz 1: Parser
     let src = std::str::from_utf8(data).unwrap_or("");
-    if src.len() > 10000 { return; }
-    
+    if src.len() > 10000 {
+        println!(
+            "coverage=partial cap=bytes kept=10000 dropped={}",
+            src.len() - 10000
+        );
+        return;
+    }
+
     let mut lex = Lexer::new(src);
     let mut tokens = 0;
     loop {
-        if lex.next_token() == nfdl_syntax::Token::Eof { break; }
+        if lex.next_token() == nfdl_syntax::Token::Eof {
+            break;
+        }
         tokens += 1;
-        if tokens > 5000 { break; }
+        if tokens > 5000 {
+            println!("coverage=partial cap=tokens kept=5000 dropped=1");
+            break;
+        }
     }
-    
+
     let mut p = Parser::new(src);
     if let Ok(proto) = p.parse_protocol() {
         // Fuzz 2: Bytecode VM
         let program = protocol_to_bytecode(&proto);
         let mut vm = BytecodeVm::new(program.slot_count);
         let _ = vm.run(&program);
-        
+
         // Fuzz 3: Reassembly
         let mut r = Reassembler::new(1000);
         if data.len() > 16 {

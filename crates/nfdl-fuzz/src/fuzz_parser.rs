@@ -17,6 +17,7 @@ fn main() {
     // Fuzz 1: Lexer should never panic
     let mut lex = Lexer::new(&src);
     let mut count = 0;
+    let mut capped = false;
     loop {
         let t = lex.next_token();
         count += 1;
@@ -24,6 +25,7 @@ fn main() {
             break;
         }
         if count > 10000 {
+            capped = true;
             break;
         } // safety
     }
@@ -32,7 +34,10 @@ fn main() {
     let mut p = Parser::new(&src);
     let _ = p.parse_protocol();
 
-    // A fuzz walk is not a decode and not a cause.
-    println!("coverage=absent");
-    let _ = count;
+    if capped {
+        println!("coverage=partial cap=tokens kept=10000 dropped=1");
+    } else {
+        // A finished fuzz walk is not a decode and not a cause.
+        println!("coverage=absent");
+    }
 }

@@ -54,6 +54,20 @@ pub struct ProblemView {
     pub superseded: bool,
 }
 
+/// One named cap hit. This is not a catalog cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoverageRecord {
+    /// Partition the cap applied to. Engine-wide caps use [`ScopeId::GLOBAL`].
+    pub scope: ScopeId,
+    /// Cap name: `ring-buffer`, `wait-queue`, `cause-capacity`, `rule-firings`,
+    /// or `diagnostics`.
+    pub cap: &'static str,
+    /// Items still retained after the hit.
+    pub kept: usize,
+    /// Items dropped by this cap. Later hits of the same cap add to this.
+    pub dropped: usize,
+}
+
 /// Deterministically-ordered extraction of the final engine state
 /// (ADR-012: merge order `(event_time, rule_decl_order, scope_id)`; here
 /// causes sort by `(scope, kind, target)`, problems keep per-scope emission
@@ -68,4 +82,7 @@ pub struct Snapshot {
     pub problems: Vec<ProblemView>,
     /// Audited actions, sorted by `(wm, rule, kind, target)`.
     pub audit: Vec<AuditEntry>,
+    /// Spill and overflow records, sorted by `(scope, cap)`. Empty means no
+    /// cap was hit. A record is coverage `partial`, not a cause.
+    pub coverage: Vec<CoverageRecord>,
 }

@@ -9,7 +9,16 @@ pub enum RuntimeError {
     Malformed(String),
     NeedMoreBytes,
     LimitExceeded(String),
-    WithLocation { msg: String, pos: usize },
+    WithLocation {
+        msg: String,
+        pos: usize,
+    },
+    /// A cap was hit. Not a cause and not an absent decode.
+    Partial {
+        cap: &'static str,
+        kept: usize,
+        dropped: usize,
+    },
 }
 
 impl From<ParseError> for RuntimeError {
@@ -50,6 +59,12 @@ impl std::fmt::Display for RuntimeError {
             RuntimeError::NeedMoreBytes => write!(f, "need more bytes"),
             RuntimeError::LimitExceeded(s) => write!(f, "limit exceeded: {}", s),
             RuntimeError::WithLocation { msg, pos } => write!(f, "error at {}: {}", pos, msg),
+            RuntimeError::Partial { cap, kept, dropped } => {
+                write!(
+                    f,
+                    "coverage=partial cap={cap} kept={kept} dropped={dropped}"
+                )
+            }
         }
     }
 }

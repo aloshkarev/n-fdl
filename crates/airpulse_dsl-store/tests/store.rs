@@ -149,6 +149,57 @@ fn ring_capacity_spill_drops_oldest_and_signals_adgl3005() {
 }
 
 #[test]
+fn ring_spill_keeps_an_unexpired_wait_anchor() {
+    let mut limits = Limits::default();
+    limits.max_ringbuffer_events_per_scope = 2;
+    let store = GraphStore::new(limits);
+    let _ = store.advance_watermark(t(0));
+    assert!(store.push_event(evt(1, 100, scope())).is_none());
+    assert!(store.push_event(evt(2, 200, scope())).is_none());
+    assert!(store.suspend(pending("r", 1, 10_000, scope())).is_none());
+
+    let spill = store
+        .push_event(evt(3, 300, scope()))
+        .expect("full ring spills an unanchored event");
+    match spill {
+        StoreDiagnostic::RingBufferSpill { dropped, .. } => {
+            assert_eq!(dropped, EventId::new(2), "the anchor is not the victim");
+        }
+        other => panic!("expected RingBufferSpill, got {other:?}"),
+    }
+    let ids: Vec<u64> = store
+        .ring(scope())
+        .expect("ring")
+        .iter()
+        .map(|e| e.id.raw())
+        .collect();
+    assert_eq!(ids, vec![1, 3]);
+
+    let mut limits = Limits::default();
+    limits.max_ringbuffer_events_per_scope = 1;
+    let full = GraphStore::new(limits);
+    let _ = full.advance_watermark(t(0));
+    assert!(full.push_event(evt(1, 100, scope())).is_none());
+    assert!(full.suspend(pending("r", 1, 10_000, scope())).is_none());
+    let rejected = full
+        .push_event(evt(2, 200, scope()))
+        .expect("a ring of anchors rejects the new event");
+    match rejected {
+        StoreDiagnostic::RingBufferSpill { dropped, .. } => {
+            assert_eq!(dropped, EventId::new(2));
+        }
+        other => panic!("expected RingBufferSpill, got {other:?}"),
+    }
+    let ids: Vec<u64> = full
+        .ring(scope())
+        .expect("ring")
+        .iter()
+        .map(|e| e.id.raw())
+        .collect();
+    assert_eq!(ids, vec![1]);
+}
+
+#[test]
 fn ring_window_scan_is_inclusive_at_both_boundaries() {
     // 05 §3.2 (D4) via 03 §3.2: correlate window
     // [anchor.time - back, anchor.time + fwd] is inclusive at BOTH ends;

@@ -12,8 +12,9 @@ use airpulse_dsl_types::{EventId, ScopeId};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreDiagnostic {
     /// `ADGL3005 RingBufferSpill` — a RingBuffer exceeded
-    /// `max_ringbuffer_events_per_scope`; the oldest (lowest-time) event was
-    /// dropped (ADR-011 spill policy, `07` §4).
+    /// `max_ringbuffer_events_per_scope`. The oldest event that no unexpired
+    /// wait names was dropped. When every resident event is an anchor, the
+    /// new event was rejected instead (ADR-011 spill policy, `07` §4).
     RingBufferSpill {
         /// Partition whose ring spilled.
         scope: ScopeId,

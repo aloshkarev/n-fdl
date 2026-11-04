@@ -12,7 +12,7 @@ use airpulse_dsl_types::{EvidenceState, ScopeId, ScopeType, Severity};
 
 use crate::Snapshot;
 use crate::evidence::redact_evidence_field_map;
-use crate::extract::{CauseView, ProblemView};
+use crate::extract::{CauseView, CoverageRecord, ProblemView};
 
 const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 
@@ -68,6 +68,13 @@ pub fn to_sarif_with_options(snapshot: &Snapshot, options: SarifOptions) -> Stri
         }
         first = false;
         write_cause_result(&mut out, cause);
+    }
+    for record in &snapshot.coverage {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        write_coverage_result(&mut out, record);
     }
 
     out.push_str("]}]}");
@@ -181,6 +188,31 @@ fn write_cause_result(out: &mut String, cause: &CauseView) {
     out.push_str("]}}");
 }
 
+fn write_coverage_result(out: &mut String, record: &CoverageRecord) {
+    out.push('{');
+    out.push_str("\"ruleId\":");
+    push_json_string(out, &format!("coverage:{}", record.cap));
+    out.push(',');
+    out.push_str("\"level\":\"note\",");
+    out.push_str("\"message\":{\"text\":");
+    let message = format!(
+        "coverage=partial cap={} kept={} dropped={}",
+        record.cap, record.kept, record.dropped
+    );
+    push_json_string(out, &message);
+    out.push_str("},");
+    out.push_str("\"partialFingerprints\":{\"scopeKey\":");
+    push_json_string(out, &fingerprint_target(record.scope));
+    out.push_str("},");
+    out.push_str("\"properties\":{\"coverage\":\"partial\",\"cap\":");
+    push_json_string(out, record.cap);
+    out.push_str(",\"kept\":");
+    let _ = write!(out, "{}", record.kept);
+    out.push_str(",\"dropped\":");
+    let _ = write!(out, "{}", record.dropped);
+    out.push_str("}}");
+}
+
 fn evidence_state_name(state: EvidenceState) -> &'static str {
     match state {
         EvidenceState::Present => "present",
@@ -284,6 +316,7 @@ mod tests {
                 superseded: false,
             }],
             audit: Vec::new(),
+            coverage: Vec::new(),
         };
 
         let json = to_sarif_with_options(&snapshot, SarifOptions::default());
@@ -312,6 +345,7 @@ mod tests {
                 superseded: false,
             }],
             audit: Vec::new(),
+            coverage: Vec::new(),
         };
 
         let open = to_sarif_with_options(&open_snapshot, SarifOptions::default());
@@ -346,6 +380,7 @@ mod tests {
             }],
             problems: Vec::new(),
             audit: Vec::new(),
+            coverage: Vec::new(),
         };
         let json = to_sarif_with_options(&snapshot, SarifOptions::default());
         assert!(json.contains(&format!("\"ruleId\":\"{published}\"")));
@@ -355,5 +390,28 @@ mod tests {
         assert!(json.contains("\"scopeKey\":\"global:"));
         assert!(!json.contains("DeviceDown"));
         assert!(!json.contains("Healthy"));
+    }
+
+    #[test]
+    fn spill_record_is_a_partial_note_and_not_a_cause_kind() {
+        use crate::CoverageRecord;
+        let snapshot = Snapshot {
+            causes: Vec::new(),
+            problems: Vec::new(),
+            audit: Vec::new(),
+            coverage: vec![CoverageRecord {
+                scope: ScopeId::GLOBAL,
+                cap: "ring-buffer",
+                kept: 2,
+                dropped: 1,
+            }],
+        };
+        let json = to_sarif_with_options(&snapshot, SarifOptions::default());
+        assert!(json.contains("\"ruleId\":\"coverage:ring-buffer\""));
+        assert!(json.contains("coverage=partial cap=ring-buffer kept=2 dropped=1"));
+        assert!(json.contains("\"coverage\":\"partial\""));
+        assert!(json.contains("\"cap\":\"ring-buffer\""));
+        assert!(!json.contains("PhysicalLinkAbsent"));
+        assert!(!json.contains("DeviceDown"));
     }
 }

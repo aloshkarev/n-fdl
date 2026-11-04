@@ -24,7 +24,8 @@ pub struct ParserContext {
 pub enum DatagramCoverage {
     /// The call had no bytes to decode.
     Absent,
-    /// A cap was hit. `cap` names it. `kept` and `dropped` are message counts.
+    /// A cap was hit. `cap` names it. `kept` and `dropped` count messages for
+    /// `short-read` and `max_layer_depth`, and bytes for `unread-tail`.
     Partial {
         /// Cap name, such as `short-read` or `max_layer_depth`.
         cap: &'static str,
@@ -72,7 +73,9 @@ impl VmState {
     ///
     /// Depth resets on every call. Empty `bytes` is [`DatagramCoverage::Absent`].
     /// A buffer that runs out before the messages do is `short-read`. Depth
-    /// past 16 is `max_layer_depth`. Neither result is a cause.
+    /// past 16 is `max_layer_depth`. Bytes left after the last message are
+    /// `unread-tail`. An empty message list with a non-empty buffer is that
+    /// same partial, with nothing consumed. None of these results is a cause.
     pub fn execute_datagram(&mut self, spec: &Protocol, bytes: &[u8]) -> DatagramCoverage {
         const MAX_LAYER_DEPTH: usize = 16;
         self.ctx.depth = 0;
@@ -100,6 +103,13 @@ impl VmState {
             }
             offset += 1;
             kept += 1;
+        }
+        if offset < bytes.len() {
+            return DatagramCoverage::Partial {
+                cap: "unread-tail",
+                kept: offset,
+                dropped: bytes.len() - offset,
+            };
         }
         DatagramCoverage::Complete
     }
@@ -168,6 +178,29 @@ mod tests {
             DatagramCoverage::Partial {
                 cap: "short-read",
                 kept: 1,
+                dropped: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn leftover_bytes_are_unread_tail_not_complete() {
+        let mut vm = VmState::new();
+        let proto = empty_proto("T", 3);
+        assert_eq!(
+            vm.execute_datagram(&proto, &[1, 2, 3, 4, 5]),
+            DatagramCoverage::Partial {
+                cap: "unread-tail",
+                kept: 3,
+                dropped: 2,
+            }
+        );
+        let empty_msgs = empty_proto("T", 0);
+        assert_eq!(
+            vm.execute_datagram(&empty_msgs, &[9, 8]),
+            DatagramCoverage::Partial {
+                cap: "unread-tail",
+                kept: 0,
                 dropped: 2,
             }
         );

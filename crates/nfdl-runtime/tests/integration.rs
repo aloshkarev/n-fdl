@@ -25,5 +25,12 @@ fn arp_protocol_to_bytecode() {
     vm.load_input(&pkt);
     let result = vm.run(&program);
 
-    assert!(result.is_ok(), "ARP bytecode run failed: {:?}", result);
+    assert!(
+        matches!(
+            result,
+            Ok(nfdl_runtime::bytecode::DatagramOutcome::Complete)
+        ),
+        "ARP bytecode run failed: {:?}",
+        result
+    );
 }

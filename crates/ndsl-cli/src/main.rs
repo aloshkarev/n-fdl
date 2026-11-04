@@ -526,11 +526,28 @@ fn cmd_run(nfdl_path: &Path, hex: Option<&str>) -> i32 {
             }
             0
         }
-        Err(e) => {
-            print_coverage(false, false);
-            eprintln!("runtime error: {e}");
-            3
-        }
+        Err(e) => match &e {
+            nfdl_runtime::RuntimeError::Partial { cap, kept, dropped } => {
+                println!("coverage=partial cap={cap} kept={kept} dropped={dropped}");
+                1
+            }
+            nfdl_runtime::RuntimeError::LimitExceeded(msg) => {
+                let cap = if msg.contains("instruction") {
+                    "max_instructions"
+                } else if msg.contains("loop") {
+                    "max_loop_iterations"
+                } else {
+                    "limit"
+                };
+                println!("coverage=partial cap={cap} kept=0 dropped=1");
+                1
+            }
+            _ => {
+                print_coverage(false, false);
+                eprintln!("runtime error: {e}");
+                3
+            }
+        },
     }
 }
 

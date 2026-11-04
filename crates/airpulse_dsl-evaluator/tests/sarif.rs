@@ -162,6 +162,7 @@ fn escaping_handles_quotes_backslashes_and_newlines() {
             superseded: false,
         }],
         audit: Vec::new(),
+        coverage: Vec::new(),
     };
 
     let sarif = to_sarif(&snapshot);

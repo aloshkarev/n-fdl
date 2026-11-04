@@ -59,6 +59,28 @@ impl VmContinuation {
     }
 }
 
+/// A datagram read that could not be stored as a present value.
+///
+/// This is not a cause. The slot for the failing read is left untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShortRead {
+    /// Cap name. Datagram truncation uses `short-read`.
+    pub cap: &'static str,
+    /// Bytes already consumed before the failing read.
+    pub kept: usize,
+    /// Bytes the read claimed and did not store.
+    pub dropped: usize,
+}
+
+/// Datagram-mode result. [`DatagramOutcome::Partial`] is not success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatagramOutcome {
+    /// The program finished and consumed its input.
+    Complete,
+    /// A short read or an unread tail. Not a stored zero.
+    Partial(ShortRead),
+}
+
 /// Result of a stream-mode interpret step (spec 06 §5.3).
 #[derive(Debug)]
 pub enum StreamOutcome {
@@ -66,6 +88,9 @@ pub enum StreamOutcome {
     Complete,
     /// Suspended: caller should append bytes and [`BytecodeVm::resume`].
     NeedMoreBytes(VmContinuation),
+    /// Datagram truncation. Stream mode uses [`StreamOutcome::NeedMoreBytes`]
+    /// when the buffer is short. A slice past the 8-byte slot is still this.
+    Truncated(ShortRead),
 }
 
 #[derive(Debug, Clone)]
@@ -379,18 +404,39 @@ impl BytecodeVm {
         }
     }
 
-    /// Datagram-mode run: short reads zero-fill (historical behaviour).
-    pub fn run(&mut self, program: &BytecodeProgram) -> Result<(), BytecodeError> {
+    fn short_read(&self, requested: usize) -> StreamOutcome {
+        StreamOutcome::Truncated(ShortRead {
+            cap: "short-read",
+            kept: self.input_pos,
+            dropped: requested,
+        })
+    }
+
+    /// Datagram-mode run.
+    ///
+    /// A short fixed-width read, or a [`Instruction::ReadSlice`] whose length
+    /// is past the buffer or past the 8-byte slot, is [`DatagramOutcome::Partial`].
+    /// The slot is not written and the cursor does not advance by the unconsumed
+    /// claimed length. Stream mode stays on [`BytecodeVm::run_stream`].
+    pub fn run(&mut self, program: &BytecodeProgram) -> Result<DatagramOutcome, BytecodeError> {
         self.instructions_executed = 0;
         self.loop_iterations = 0;
         match self.interpret(program, 0, false)? {
-            StreamOutcome::Complete => Ok(()),
-            StreamOutcome::NeedMoreBytes(_) => {
-                // Datagram mode never yields; treat as internal invariant break.
-                Err(BytecodeError::Constraint(
-                    "internal: datagram run yielded NeedMoreBytes".into(),
-                ))
+            StreamOutcome::Complete => {
+                if self.input_pos < self.input.len() {
+                    Ok(DatagramOutcome::Partial(ShortRead {
+                        cap: "unread-tail",
+                        kept: self.input_pos,
+                        dropped: self.input.len() - self.input_pos,
+                    }))
+                } else {
+                    Ok(DatagramOutcome::Complete)
+                }
             }
+            StreamOutcome::Truncated(short) => Ok(DatagramOutcome::Partial(short)),
+            StreamOutcome::NeedMoreBytes(_) => Err(BytecodeError::Constraint(
+                "internal: datagram run yielded NeedMoreBytes".into(),
+            )),
         }
     }
 
@@ -468,8 +514,7 @@ impl BytecodeVm {
                     } else if stream {
                         return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, 1)));
                     } else {
-                        self.write_slot(*slot, 0);
-                        ip += 1;
+                        return Ok(self.short_read(1));
                     }
                 }
                 Instruction::ReadU16 { slot, le } => {
@@ -490,8 +535,7 @@ impl BytecodeVm {
                             self.snapshot(ip, needed.max(1)),
                         ));
                     } else {
-                        self.write_slot(*slot, 0);
-                        ip += 1;
+                        return Ok(self.short_read(2));
                     }
                 }
                 Instruction::ReadU24 { slot, le } => {
@@ -512,8 +556,7 @@ impl BytecodeVm {
                             self.snapshot(ip, needed.max(1)),
                         ));
                     } else {
-                        self.write_slot(*slot, 0);
-                        ip += 1;
+                        return Ok(self.short_read(3));
                     }
                 }
                 Instruction::ReadU32 { slot, le } => {
@@ -534,8 +577,7 @@ impl BytecodeVm {
                             self.snapshot(ip, needed.max(1)),
                         ));
                     } else {
-                        self.write_slot(*slot, 0);
-                        ip += 1;
+                        return Ok(self.short_read(4));
                     }
                 }
                 Instruction::ReadSlice { len_slot, dst_slot } => {
@@ -547,26 +589,33 @@ impl BytecodeVm {
                     } else {
                         0usize
                     };
-                    if stream && *len_slot != u16::MAX && self.input_pos + len > self.input.len() {
+                    let past_buffer = self.input_pos.saturating_add(len) > self.input.len();
+                    let past_slot = len > 8;
+                    if stream && *len_slot != u16::MAX && past_buffer {
                         let have = self.input.len().saturating_sub(self.input_pos);
                         let needed = len.saturating_sub(have).max(1);
                         return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed)));
                     }
+                    if past_buffer || past_slot {
+                        // Do not store a prefix and do not skip the unconsumed tail.
+                        return Ok(self.short_read(len));
+                    }
                     let mut val = 0u64;
-                    for i in 0..len.min(8) {
-                        if self.input_pos + i < self.input.len() {
-                            val = (val << 8) | (self.input[self.input_pos + i] as u64);
-                        }
+                    for i in 0..len {
+                        val = (val << 8) | (self.input[self.input_pos + i] as u64);
                     }
                     self.write_slot(*dst_slot, val);
                     self.input_pos += len;
                     ip += 1;
                 }
                 Instruction::ReadBits { bits, slot } => {
-                    if stream && self.bits_remaining() < *bits as usize {
+                    if self.bits_remaining() < *bits as usize {
                         let missing_bits = (*bits as usize).saturating_sub(self.bits_remaining());
                         let needed = missing_bits.div_ceil(8).max(1);
-                        return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed)));
+                        if stream {
+                            return Ok(StreamOutcome::NeedMoreBytes(self.snapshot(ip, needed)));
+                        }
+                        return Ok(self.short_read(needed));
                     }
                     let val = self.read_bits(*bits);
                     self.write_slot(*slot, val);
@@ -743,7 +792,10 @@ mod tests {
 
         let mut vm = BytecodeVm::new(4);
         vm.load_input(&[0x00, 0x01, 0x08, 0x00]);
-        assert!(vm.run(&program).is_ok());
+        assert!(matches!(
+            vm.run(&program).unwrap(),
+            DatagramOutcome::Complete
+        ));
         assert_eq!(vm.get_slot(0), 1);
         assert_eq!(vm.get_slot(1), 0x0800);
     }
@@ -774,7 +826,9 @@ mod tests {
                 assert!(cont.bytes_needed() >= 1);
                 assert_eq!(cont.consumed(), 1);
             }
-            StreamOutcome::Complete => panic!("expected NeedMoreBytes"),
+            StreamOutcome::Complete | StreamOutcome::Truncated(_) => {
+                panic!("expected NeedMoreBytes")
+            }
         }
     }
 
@@ -796,7 +850,9 @@ mod tests {
         vm.load_input(&whole[..1]);
         let cont = match vm.run_stream(&program).unwrap() {
             StreamOutcome::NeedMoreBytes(c) => c,
-            StreamOutcome::Complete => panic!("expected NeedMoreBytes after 1 byte"),
+            StreamOutcome::Complete | StreamOutcome::Truncated(_) => {
+                panic!("expected NeedMoreBytes after 1 byte")
+            }
         };
         let (vm2, outcome) = BytecodeVm::resume(cont, &program, &whole[1..]).unwrap();
         assert!(matches!(outcome, StreamOutcome::Complete));
@@ -826,7 +882,7 @@ mod tests {
         vm.load_input(&whole[..1]);
         let mut pending = match vm.run_stream(&program).unwrap() {
             StreamOutcome::NeedMoreBytes(c) => Some(c),
-            StreamOutcome::Complete => None,
+            StreamOutcome::Complete | StreamOutcome::Truncated(_) => None,
         };
         let mut final_vm = vm;
         for i in 1..whole.len() {
@@ -839,6 +895,9 @@ mod tests {
                     pending = None;
                     break;
                 }
+                StreamOutcome::Truncated(_) => {
+                    panic!("stream resume must not truncate a short read")
+                }
             }
         }
         assert!(pending.is_none(), "should complete after last byte");
@@ -850,5 +909,55 @@ mod tests {
             ],
             expect
         );
+    }
+
+    #[test]
+    fn datagram_short_read_does_not_store_zero() {
+        let program = BytecodeProgram {
+            instructions: vec![
+                Instruction::ReadU16 { slot: 0, le: false },
+                Instruction::Return,
+            ],
+            slot_count: 2,
+        };
+        let mut vm = BytecodeVm::new(2);
+        vm.load_input(&[0xAB]);
+        assert_eq!(
+            vm.run(&program).unwrap(),
+            DatagramOutcome::Partial(ShortRead {
+                cap: "short-read",
+                kept: 0,
+                dropped: 2,
+            })
+        );
+        assert!(!vm.slot_touched(0));
+        assert_eq!(vm.current_offset(), 0);
+    }
+
+    #[test]
+    fn read_slice_past_slot_does_not_advance() {
+        let program = BytecodeProgram {
+            instructions: vec![
+                Instruction::LoadConst { value: 10, dst: 0 },
+                Instruction::ReadSlice {
+                    len_slot: 0,
+                    dst_slot: 1,
+                },
+                Instruction::Return,
+            ],
+            slot_count: 4,
+        };
+        let mut vm = BytecodeVm::new(4);
+        vm.load_input(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(
+            vm.run(&program).unwrap(),
+            DatagramOutcome::Partial(ShortRead {
+                cap: "short-read",
+                kept: 0,
+                dropped: 10,
+            })
+        );
+        assert!(!vm.slot_touched(1));
+        assert_eq!(vm.current_offset(), 0);
     }
 }

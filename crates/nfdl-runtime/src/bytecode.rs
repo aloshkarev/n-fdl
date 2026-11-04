@@ -4,6 +4,6 @@
 //! `nfdl_runtime::bytecode::…` and the crate-root `pub use` paths working.
 
 pub use nfdl_bytecode::{
-    BytecodeBinOp, BytecodeError, BytecodeProgram, BytecodeUnaryOp, BytecodeVm, Instruction,
-    Limits, StreamOutcome, VmContinuation,
+    BytecodeBinOp, BytecodeError, BytecodeProgram, BytecodeUnaryOp, BytecodeVm, DatagramOutcome,
+    Instruction, Limits, ShortRead, StreamOutcome, VmContinuation,
 };

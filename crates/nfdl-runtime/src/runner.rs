@@ -1,7 +1,7 @@
 //! Runner with full context extraction from fields into EFSM.
 //! Now uses bytecode VM that supports loops via jumps and BinOp.
 
-use crate::bytecode::{BytecodeVm, Limits};
+use crate::bytecode::{BytecodeVm, DatagramOutcome, Limits};
 use crate::efsm::FsmEngine;
 use crate::error::RuntimeError;
 use crate::event_bus::{Event, EventBus, VecSink};
@@ -145,6 +145,17 @@ fn sample_radius_access_request() -> Vec<u8> {
     pkt
 }
 
+fn finish_datagram(outcome: DatagramOutcome) -> Result<(), RuntimeError> {
+    match outcome {
+        DatagramOutcome::Complete => Ok(()),
+        DatagramOutcome::Partial(short) => Err(RuntimeError::Partial {
+            cap: short.cap,
+            kept: short.kept,
+            dropped: short.dropped,
+        }),
+    }
+}
+
 pub fn run_protocol(proto: &Protocol) -> Result<Vec<Event>, RuntimeError> {
     let (program, field_map) = protocol_to_bytecode_with_map(proto);
     let limits = Limits {
@@ -154,7 +165,7 @@ pub fn run_protocol(proto: &Protocol) -> Result<Vec<Event>, RuntimeError> {
     let mut vm = BytecodeVm::with_limits(program.slot_count, limits);
     let sample_data = sample_radius_access_request();
     vm.load_input(&sample_data);
-    vm.run(&program)?;
+    finish_datagram(vm.run(&program)?)?;
 
     let sink = VecSink::new();
     let mut bus = EventBus::new(sink);
@@ -193,6 +204,13 @@ pub fn run_protocol(proto: &Protocol) -> Result<Vec<Event>, RuntimeError> {
 
         let root_msg = root_message_name(proto);
         let (new_state, evs) = fsm.feed(key, &root_msg, &ctx);
+        if let Some(cov) = fsm.coverage {
+            return Err(RuntimeError::Partial {
+                cap: cov.cap,
+                kept: cov.kept,
+                dropped: cov.dropped,
+            });
+        }
         for e in evs {
             bus.emit(e);
         }
@@ -227,8 +245,15 @@ pub fn parse_and_run_stream(
 ) -> Result<(Protocol, HashMap<String, u64>, String, Vec<Event>), RuntimeError> {
     let mut r = Reassembler::new(initial_seq);
     for (seq, data) in segments {
-        r.accept_segment(*seq, data.clone())
-            .map_err(|e| RuntimeError::LimitExceeded(format!("reassembly: {:?}", e)))?;
+        match r.accept_segment(*seq, data.clone()) {
+            Ok(()) => {}
+            Err(crate::reassembly::ReassemblyError::Partial { cap, kept, dropped }) => {
+                return Err(RuntimeError::Partial { cap, kept, dropped });
+            }
+            Err(e) => {
+                return Err(RuntimeError::LimitExceeded(format!("reassembly: {e:?}")));
+            }
+        }
     }
     parse_and_run_with_data(src, r.get_contiguous())
 }
@@ -323,7 +348,7 @@ pub fn parse_and_run_with_data_and_limits(
         let (program, field_map) = protocol_to_bytecode_with_map(&tp);
         let mut vm = BytecodeVm::with_limits(program.slot_count, limits);
         vm.load_input(data);
-        vm.run(&program)?;
+        finish_datagram(vm.run(&program)?)?;
         let mut ctx: HashMap<String, u64> = HashMap::new();
         for (name, &s) in &field_map {
             if vm.slot_touched(s) {
@@ -350,7 +375,7 @@ pub fn parse_and_run_with_data_and_limits(
     let (program, field_map) = protocol_to_bytecode_with_map(&temp_proto);
     let mut vm = BytecodeVm::with_limits(program.slot_count, limits.clone());
     vm.load_input(data);
-    vm.run(&program)?;
+    finish_datagram(vm.run(&program)?)?;
 
     let mut ctx: HashMap<String, u64> = HashMap::new();
     for (name, &s) in &field_map {
@@ -384,6 +409,13 @@ pub fn parse_and_run_with_data_and_limits(
     let key_expr = proto.state_machines.first().and_then(|sm| sm.key.clone());
     let key = compute_flow_key(&key_expr, &ctx);
     let (final_state, fsm_evs) = fsm.feed(key.clone(), &root_msg, &ctx);
+    if let Some(cov) = fsm.coverage {
+        return Err(RuntimeError::Partial {
+            cap: cov.cap,
+            kept: cov.kept,
+            dropped: cov.dropped,
+        });
+    }
 
     // Merge per-flow variables (from Set actions) into returned ctx
     if let Some(vars) = fsm.get_variables(&key) {

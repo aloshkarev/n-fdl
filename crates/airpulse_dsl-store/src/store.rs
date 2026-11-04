@@ -79,11 +79,17 @@ impl GraphStore {
     #[must_use = "spill diagnostics must be routed by the caller (ADR-011)"]
     pub fn push_event(&self, event: EventNode) -> Option<StoreDiagnostic> {
         let scope = event.scope;
+        let wm = self.watermark();
+        let keep: std::collections::HashSet<_> = self
+            .pending
+            .get(&scope)
+            .map(|queue| queue.unexpired_anchor_ids(wm).into_iter().collect())
+            .unwrap_or_default();
         let mut ring = self
             .rings
             .entry(scope)
             .or_insert_with(|| RingBuffer::new(scope, self.limits.max_ringbuffer_events_per_scope));
-        ring.push(event)
+        ring.push_keeping(event, &keep)
     }
 
     /// Read access to a scope's ring (window scans, anchor lookup).

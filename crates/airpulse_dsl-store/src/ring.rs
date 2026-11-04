@@ -15,8 +15,10 @@ use crate::event::EventNode;
 /// Invariants:
 /// - `buf` is non-decreasing in `EventNode.time` (late events are inserted
 ///   in time position, `08` §4 offline accept);
-/// - `buf.len() <= capacity` — overflow drops the oldest event and signals
-///   `ADGL3005 RingBufferSpill` (ADR-011 spill policy).
+/// - `buf.len() <= capacity` — overflow drops the oldest event that no
+///   caller-supplied keep-set names, and signals `ADGL3005 RingBufferSpill`
+///   (ADR-011 spill policy). If every resident event is kept, the new event
+///   is not inserted.
 #[derive(Debug, Clone)]
 pub struct RingBuffer {
     buf: VecDeque<EventNode>,
@@ -69,28 +71,53 @@ impl RingBuffer {
     /// at their time position, *after* any already-buffered event with the
     /// same time (arrival order is the deterministic tie-break).
     ///
-    /// If the ring is full the oldest (lowest-time) event is dropped and an
+    /// If the ring is full the oldest event is dropped and an
     /// `ADGL3005 RingBufferSpill` diagnostic is returned (ADR-011); the
     /// store itself never logs (`07` §9 / crate contract).
     #[must_use = "spill diagnostics must be routed by the caller (ADR-011)"]
     pub fn push(&mut self, event: EventNode) -> Option<StoreDiagnostic> {
-        let spill = if self.buf.len() == self.capacity {
-            // Drop oldest (lowest time — front, by the sort invariant).
-            self.buf
-                .pop_front()
-                .map(|dropped| StoreDiagnostic::RingBufferSpill {
-                    scope: self.scope,
-                    dropped: dropped.id,
-                    capacity: self.capacity,
-                })
+        self.push_keeping(event, &std::collections::HashSet::new())
+    }
+
+    /// Like [`Self::push`], but an id in `keep` is not the spill victim.
+    ///
+    /// The victim is the oldest resident event whose id is not in `keep`.
+    /// When every resident event is kept, `event` is not inserted and the
+    /// diagnostic names that rejected id. `keep` is the unexpired wait
+    /// anchors for this partition.
+    #[must_use = "spill diagnostics must be routed by the caller (ADR-011)"]
+    pub fn push_keeping(
+        &mut self,
+        event: EventNode,
+        keep: &std::collections::HashSet<airpulse_dsl_types::EventId>,
+    ) -> Option<StoreDiagnostic> {
+        if self.buf.len() < self.capacity {
+            self.insert_sorted(event);
+            return None;
+        }
+        let dropped = if let Some(idx) = self.buf.iter().position(|e| !keep.contains(&e.id)) {
+            let id = self
+                .buf
+                .remove(idx)
+                .expect("position is inside the ring")
+                .id;
+            self.insert_sorted(event);
+            id
         } else {
-            None
+            event.id
         };
-        // First index whose time exceeds the new event's time: equal-time
-        // events keep arrival order (insert after them).
+        Some(StoreDiagnostic::RingBufferSpill {
+            scope: self.scope,
+            dropped,
+            capacity: self.capacity,
+        })
+    }
+
+    /// First index whose time exceeds the new event's time: equal-time
+    /// events keep arrival order (insert after them).
+    fn insert_sorted(&mut self, event: EventNode) {
         let pos = self.buf.partition_point(|e| e.time <= event.time);
         self.buf.insert(pos, event);
-        spill
     }
 
     /// Iterates events with `time ∈ [anchor - back, anchor + fwd]`,

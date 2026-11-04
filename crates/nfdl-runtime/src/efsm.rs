@@ -28,6 +28,14 @@ fn flow_key_hash(key: &FlowKey) -> u64 {
     h
 }
 
+/// Session-table cap. Not a cause and not [`Event::SessionExpired`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionPartial {
+    pub cap: &'static str,
+    pub kept: usize,
+    pub dropped: usize,
+}
+
 /// Result of a due timer that was fired through the transition engine.
 #[derive(Debug, Clone)]
 pub struct FiredTimer {
@@ -59,6 +67,8 @@ pub struct FsmEngine {
     /// Logical clock for timer deadlines (independent of session LRU ticks).
     timer_now: u64,
     timer_seq: u64,
+    /// Set when LRU eviction drops a session. Idle expiry stays [`Event::SessionExpired`].
+    pub coverage: Option<SessionPartial>,
 }
 
 impl FsmEngine {
@@ -73,6 +83,23 @@ impl FsmEngine {
             timers: HashMap::new(),
             timer_now: 0,
             timer_seq: 0,
+            coverage: None,
+        }
+    }
+
+    fn note_session_partial(&mut self, kept: usize) {
+        match &mut self.coverage {
+            Some(cov) if cov.cap == "max_sessions" => {
+                cov.kept = kept;
+                cov.dropped = cov.dropped.saturating_add(1);
+            }
+            _ => {
+                self.coverage = Some(SessionPartial {
+                    cap: "max_sessions",
+                    kept,
+                    dropped: 1,
+                });
+            }
         }
     }
 
@@ -131,6 +158,8 @@ impl FsmEngine {
         let (_, evicted) = self.db.get_or_create(key.clone());
         if let Some(evicted_key) = evicted {
             self.drop_flow_maps(&evicted_key);
+            let kept = self.db.len();
+            self.note_session_partial(kept);
         }
 
         // A fresh flow has no recorded current state. Per machine, the initial
@@ -308,5 +337,38 @@ impl FsmEngine {
         self.current_states.remove(key);
         self.variables.remove(key);
         self.timers.remove(key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lru_eviction_is_partial_not_session_expired() {
+        let mut fsm = FsmEngine::new(1);
+        let first = FlowKey { data: [1; 16] };
+        let second = FlowKey { data: [2; 16] };
+        let (_, events) = fsm.feed(first, "Data", &HashMap::new());
+        assert!(fsm.coverage.is_none());
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::SessionExpired { .. }))
+        );
+        let (_, events) = fsm.feed(second, "Data", &HashMap::new());
+        assert_eq!(
+            fsm.coverage,
+            Some(SessionPartial {
+                cap: "max_sessions",
+                kept: 1,
+                dropped: 1,
+            })
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::SessionExpired { .. }))
+        );
     }
 }

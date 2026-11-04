@@ -189,7 +189,30 @@ fn usage() {
     );
 }
 
-fn cmd_parse(path: &str) -> Result<Protocol, ()> {
+fn limit_cap(msg: &str) -> &'static str {
+    if msg.contains("instruction") {
+        "max_instructions"
+    } else if msg.contains("loop") {
+        "max_loop_iterations"
+    } else {
+        "limit"
+    }
+}
+
+fn partial_line(err: &nfdl_runtime::RuntimeError) -> Option<String> {
+    match err {
+        nfdl_runtime::RuntimeError::Partial { cap, kept, dropped } => Some(format!(
+            "coverage=partial cap={cap} kept={kept} dropped={dropped}"
+        )),
+        nfdl_runtime::RuntimeError::LimitExceeded(msg) => Some(format!(
+            "coverage=partial cap={} kept=0 dropped=1",
+            limit_cap(msg)
+        )),
+        _ => None,
+    }
+}
+
+fn cmd_parse(path: &str) -> i32 {
     let src = fs::read_to_string(path).expect("read file");
     let mut lex = Lexer::new(&src);
     let mut token_count = 0;
@@ -215,46 +238,55 @@ fn cmd_parse(path: &str) -> Result<Protocol, ()> {
                 total_fields,
             ) = protocol_summary(&proto, &src);
 
-            println!("N-FDL v1 SUCCESS");
-            println!("File: {}", path);
-            println!("Tokens: {}", token_count);
-            println!("Messages: {}", proto.messages.len());
-            println!("State machines: {}", proto.state_machines.len());
-            println!("Binds: {}", proto.binds.len());
-            for b in &proto.binds {
-                println!(
-                    "  bind {} payload={} source={} when={:?}",
-                    b.layer, b.field, b.source, b.when
-                );
-            }
-            println!("mode=stream: {}", mode_stream);
-            println!("bytes[EOF]: {}", has_eof);
-            println!("bidir: {}", has_bidir);
-            println!("u24: {}", has_u24);
-            println!("match: {}", has_match);
-            println!("padding: {}", has_padding);
-            println!("Max depth: {}", max_depth_seen);
-            println!("Total fields: {}", total_fields);
-            println!("Limits enforced: true");
+            match nfdl_runtime::parse_and_run(&src) {
+                Ok((_, evs)) => {
+                    println!("N-FDL v1 SUCCESS");
+                    println!("File: {}", path);
+                    println!("Tokens: {}", token_count);
+                    println!("Messages: {}", proto.messages.len());
+                    println!("State machines: {}", proto.state_machines.len());
+                    println!("Binds: {}", proto.binds.len());
+                    for b in &proto.binds {
+                        println!(
+                            "  bind {} payload={} source={} when={:?}",
+                            b.layer, b.field, b.source, b.when
+                        );
+                    }
+                    println!("mode=stream: {}", mode_stream);
+                    println!("bytes[EOF]: {}", has_eof);
+                    println!("bidir: {}", has_bidir);
+                    println!("u24: {}", has_u24);
+                    println!("match: {}", has_match);
+                    println!("padding: {}", has_padding);
+                    println!("Max depth: {}", max_depth_seen);
+                    println!("Total fields: {}", total_fields);
+                    println!("Limits enforced: true");
 
-            println!("\n[Production AST]");
-            println!("Protocol: {} (endian={})", proto.name, proto.endian);
-            for msg in &proto.messages {
-                println!("  msg {} ({} fields)", msg.name, msg.fields.len());
-                for f in msg.fields.iter().take(5) {
-                    println!("    field {}: {:?}", f.name, f.ty);
+                    println!("\n[Production AST]");
+                    println!("Protocol: {} (endian={})", proto.name, proto.endian);
+                    for msg in &proto.messages {
+                        println!("  msg {} ({} fields)", msg.name, msg.fields.len());
+                        for f in msg.fields.iter().take(5) {
+                            println!("    field {}: {:?}", f.name, f.ty);
+                        }
+                    }
+                    println!("  bytecode events: {}", evs.len());
+                    0
+                }
+                Err(e) => {
+                    if let Some(line) = partial_line(&e) {
+                        println!("{line}");
+                        1
+                    } else {
+                        eprintln!("runtime error: {e}");
+                        3
+                    }
                 }
             }
-
-            match nfdl_runtime::parse_and_run(&src) {
-                Ok((_, evs)) => println!("  bytecode events: {}", evs.len()),
-                Err(e) => eprintln!("  runtime error: {}", e),
-            }
-            Ok(proto)
         }
         Err(e) => {
             print_parse_error(&e);
-            Err(())
+            2
         }
     }
 }
@@ -277,6 +309,7 @@ fn cmd_run(path: &str, hex: &str, max_instr: Option<usize>) {
     };
     match nfdl_runtime::parse_and_run_with_data_and_limits(&src, &data, limits) {
         Ok((_proto, ctx, final_state, evs)) => {
+            println!("coverage=complete");
             println!(
                 "run: {} bytes, final_state={}, events={}",
                 data.len(),
@@ -293,6 +326,10 @@ fn cmd_run(path: &str, hex: &str, max_instr: Option<usize>) {
             }
         }
         Err(e) => {
+            if let Some(line) = partial_line(&e) {
+                println!("{line}");
+                std::process::exit(1);
+            }
             eprintln!("runtime error: {e}");
             std::process::exit(3);
         }
@@ -363,7 +400,7 @@ fn main() {
                 usage();
                 std::process::exit(1);
             }
-            let _ = cmd_parse(&args[2]);
+            std::process::exit(cmd_parse(&args[2]));
         }
         "run" => {
             // run <file> --hex <hex> [--max-instructions N]
@@ -399,7 +436,7 @@ fn main() {
                 usage();
                 std::process::exit(1);
             }
-            let _ = cmd_parse(other);
+            std::process::exit(cmd_parse(other));
         }
     }
 }

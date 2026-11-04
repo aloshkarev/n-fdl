@@ -123,11 +123,13 @@ fn messageref_let_does_not_leak_to_sibling_match_arm() {
     "#;
     // kind = 5 (not 99) -> default arm reads bytes[depth]; depth must be 2 (Root),
     // not 7 (Leaf, which was inlined while emitting the `case 99` arm first).
-    let pkt = hex_to_bytes("05 aabb ffff");
+    // The buffer is exactly kind + 2 bytes. A leaked depth of 7 is a short read,
+    // and a longer buffer would be unread-tail rather than a complete decode.
+    let pkt = hex_to_bytes("05 aabb");
     let (_proto, ctx, _state, _evs) =
         parse_and_run_with_data_and_limits(src, &pkt, Limits::default()).expect("scope run");
 
-    // rest = bytes[2] = 0xAABB; the third byte (0xFF) is left unconsumed.
+    // rest = bytes[2] = 0xAABB.
     assert_eq!(
         *ctx.get("rest").unwrap_or(&0),
         0xAABB,

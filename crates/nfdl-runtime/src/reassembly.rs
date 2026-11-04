@@ -7,7 +7,12 @@ use std::collections::BTreeMap;
 pub enum ReassemblyError {
     NeedMoreBytes(usize),
     OverlapConflict,
-    LimitExceeded,
+    /// `ooo` plus contiguous bytes would pass `max_buffer`. Not `Ok`.
+    Partial {
+        cap: &'static str,
+        kept: usize,
+        dropped: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -30,10 +35,31 @@ impl Reassembler {
         }
     }
 
-    /// Accept a TCP segment. Returns Ok(()) or NeedMoreBytes.
+    fn occupied(&self) -> usize {
+        self.contiguous.len() + self.ooo.values().map(Vec::len).sum::<usize>()
+    }
+
+    /// Accept a TCP segment. A drop past `max_buffer` is [`ReassemblyError::Partial`],
+    /// counting out-of-order bytes, and is not `Ok`.
     pub fn accept_segment(&mut self, seq: u32, data: Vec<u8>) -> Result<(), ReassemblyError> {
-        if self.contiguous.len() + data.len() > self.max_buffer {
-            return Err(ReassemblyError::LimitExceeded);
+        let incoming = data.len();
+        let growth = if seq == self.next_seq {
+            incoming
+        } else if seq > self.next_seq {
+            match self.ooo.get(&seq) {
+                Some(existing) => incoming.saturating_sub(existing.len()),
+                None => incoming,
+            }
+        } else {
+            0
+        };
+        let occupied = self.occupied();
+        if growth > 0 && occupied.saturating_add(growth) > self.max_buffer {
+            return Err(ReassemblyError::Partial {
+                cap: "reassembly",
+                kept: occupied,
+                dropped: growth,
+            });
         }
 
         let _rel = seq.wrapping_sub(self.base_seq);
@@ -114,5 +140,23 @@ mod tests {
         let mut r = Reassembler::new(0);
         r.accept_segment(0, vec![1, 2]).unwrap();
         assert_eq!(r.bytes_needed(5), Some(3));
+    }
+
+    #[test]
+    fn ooo_bytes_count_toward_max_buffer() {
+        let mut r = Reassembler::new(0);
+        r.max_buffer = 4;
+        r.accept_segment(2, vec![1, 2]).unwrap();
+        let err = r.accept_segment(4, vec![3, 4, 5]).unwrap_err();
+        assert_eq!(
+            err,
+            ReassemblyError::Partial {
+                cap: "reassembly",
+                kept: 2,
+                dropped: 3,
+            }
+        );
+        assert!(r.ooo.contains_key(&2));
+        assert!(!r.ooo.contains_key(&4));
     }
 }

@@ -91,6 +91,11 @@ pub fn parse_stream_start_with_limits(
     vm.load_input(data);
     match vm.run_stream(&program)? {
         StreamOutcome::Complete => Ok(finalize(proto, field_map, &root_msg, &vm)?),
+        StreamOutcome::Truncated(short) => Err(RuntimeError::Partial {
+            cap: short.cap,
+            kept: short.kept,
+            dropped: short.dropped,
+        }),
         StreamOutcome::NeedMoreBytes(vm_cont) => {
             let needed = vm_cont.bytes_needed();
             Ok(StreamParseStep::NeedMoreBytes {
@@ -124,6 +129,11 @@ pub fn resume(
     let (vm, outcome) = BytecodeVm::resume(vm_cont, &program, more_bytes)?;
     match outcome {
         StreamOutcome::Complete => Ok(finalize(proto, field_map, &root_msg, &vm)?),
+        StreamOutcome::Truncated(short) => Err(RuntimeError::Partial {
+            cap: short.cap,
+            kept: short.kept,
+            dropped: short.dropped,
+        }),
         StreamOutcome::NeedMoreBytes(vm_cont) => {
             let needed = vm_cont.bytes_needed();
             Ok(StreamParseStep::NeedMoreBytes {

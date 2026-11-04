@@ -61,7 +61,7 @@ pub use diag::EngineDiagnostic;
 pub use engine::Engine;
 pub use error::CorrelateError;
 pub use evidence::{catalog_pii_field_names, redact_evidence_field_map};
-pub use extract::{CauseView, ProblemView, Snapshot};
+pub use extract::{CauseView, CoverageRecord, ProblemView, Snapshot};
 pub use interner::{ScopeInterner, scope_key_i64};
 pub use predicate::{PredCtx, eval_predicate};
 pub use sarif::{SarifOptions, to_sarif, to_sarif_with_options};

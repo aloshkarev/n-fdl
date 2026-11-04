@@ -33,6 +33,7 @@ fn verify_message(msg: &Message, buf: &mut DiagBuffer) {
     for lp in &msg.loops {
         seed_field_intervals(&lp.body, &mut analyzer);
     }
+    seed_matches(&msg.matches, &mut analyzer);
 
     for f in &msg.fields {
         check_field_slice(f, &analyzer, buf);
@@ -40,6 +41,39 @@ fn verify_message(msg: &Message, buf: &mut DiagBuffer) {
     for lp in &msg.loops {
         for f in &lp.body {
             check_field_slice(f, &analyzer, buf);
+        }
+    }
+    check_matches(&msg.matches, &analyzer, buf);
+}
+
+fn seed_matches(matches: &[nfdl_syntax::ast::Match], analyzer: &mut IntervalAnalyzer) {
+    for m in matches {
+        for arm in &m.arms {
+            seed_field_intervals(&arm.fields, analyzer);
+            for lp in &arm.loops {
+                seed_field_intervals(&lp.body, analyzer);
+            }
+            seed_matches(&arm.matches, analyzer);
+        }
+    }
+}
+
+fn check_matches(
+    matches: &[nfdl_syntax::ast::Match],
+    analyzer: &IntervalAnalyzer,
+    buf: &mut DiagBuffer,
+) {
+    for m in matches {
+        for arm in &m.arms {
+            for f in &arm.fields {
+                check_field_slice(f, analyzer, buf);
+            }
+            for lp in &arm.loops {
+                for f in &lp.body {
+                    check_field_slice(f, analyzer, buf);
+                }
+            }
+            check_matches(&arm.matches, analyzer, buf);
         }
     }
 }
@@ -53,7 +87,7 @@ fn seed_field_intervals(fields: &[Field], analyzer: &mut IntervalAnalyzer) {
             NfdlType::U8 => Some(Interval::new(0, (1i64 << 8) - 1)),
             NfdlType::U16 => Some(Interval::new(0, (1i64 << 16) - 1)),
             NfdlType::U24 => Some(Interval::new(0, (1i64 << 24) - 1)),
-            NfdlType::U32 => Some(Interval::new(0, i64::MAX)), // full u32 overflows i64; cap
+            NfdlType::U32 => Some(Interval::new(0, u32::MAX as i64)),
             _ => None,
         };
         if let Some(v) = value {
@@ -67,7 +101,16 @@ fn check_field_slice(field: &Field, analyzer: &IntervalAnalyzer, buf: &mut DiagB
         // Without a known __rem fact we cannot prove safety; emit a note so the
         // author is aware the slice relies on a runtime validate/__rem guard.
         let len_int = analyzer.analyze_expr(&expr_to_string(len));
-        if len_int.lo < 0 {
+        if slice_unproved(&len_int) {
+            buf.push(Diagnostic::note(
+                "NFDV02",
+                format!(
+                    "`bytes[...]` length `{}` coverage=partial cap=slice kept=0 dropped=1",
+                    expr_to_string(len)
+                ),
+                field.span,
+            ));
+        } else if len_int.lo < 0 {
             buf.push(Diagnostic::warning(
                 "NFDV01",
                 format!(
@@ -76,17 +119,16 @@ fn check_field_slice(field: &Field, analyzer: &IntervalAnalyzer, buf: &mut DiagB
                 ),
                 field.span,
             ));
-        } else if len_int.hi == i64::MAX / 2 {
-            buf.push(Diagnostic::note(
-                "NFDV02",
-                format!(
-                    "`bytes[...]` length `{}` is not statically bounded; relies on runtime `validate`/`__rem`",
-                    expr_to_string(len)
-                ),
-                field.span,
-            ));
         }
     }
+}
+
+/// A slice is unproved when its interval is the unknown sentinel or its high
+/// bound is above a remaining input this verifier can name (`i32::MAX`).
+/// A non-negative length at or below that bound emits nothing.
+fn slice_unproved(len_int: &Interval) -> bool {
+    let unknown = len_int.lo <= i64::MIN / 2 || len_int.hi >= i64::MAX / 2;
+    unknown || len_int.hi > i32::MAX as i64
 }
 
 fn expr_to_string(expr: &Expr) -> String {
@@ -284,5 +326,41 @@ protocol P {
             "bounded u8 length should not trigger diagnostics, got: {:?}",
             buf.render(src, "x")
         );
+    }
+
+    #[test]
+    fn u32_slice_and_match_arm_name_partial_coverage() {
+        let src = r#"
+protocol P {
+    meta { endian = big; mode = datagram; }
+    message M {
+        tag: u8;
+        len: u32;
+        data: bytes[len];
+        match tag {
+            case 1 => {
+                arm_len: u32;
+                arm: bytes[arm_len];
+            }
+            default => {
+                rest: bytes[1];
+            }
+        }
+    }
+}
+"#;
+        let proto = Parser::new(src).parse_protocol().expect("parse");
+        let buf = verify_protocol(&proto);
+        let notes = buf
+            .iter()
+            .filter(|d| d.message.contains("coverage=partial") && d.message.contains("cap=slice"))
+            .count();
+        assert_eq!(
+            notes,
+            2,
+            "u32 slices are partial and a fitting constant is not, got: {}",
+            buf.render(src, "x")
+        );
+        assert!(!buf.has_errors());
     }
 }
