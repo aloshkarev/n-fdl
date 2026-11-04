@@ -84,6 +84,6 @@ regression tests in `crates/nfdl-runtime/tests/phase5_finalization.rs`:
 
 `match` arm grammar follows `02-grammar.ebnf`: `case <expr> => { … }` and
 `default => { … }` (the `case` keyword and braces are required). Recursive
-`MessageRef` (grouped AVPs) is compile-time-unrolled up to `MAX_REF_DEPTH = 8`;
-deeper runtime nesting is a v1.5 item (a `Call`/`Return` subroutine model would
-remove the bound).
+`MessageRef` (grouped AVPs) is compile-time-unrolled up to `max_layer_depth`
+(16). The next layer is partial coverage cap `max_layer_depth`, not a stored
+byte. A `Call`/`Return` subroutine model would remove the bound.

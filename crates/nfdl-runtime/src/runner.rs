@@ -258,6 +258,37 @@ pub fn parse_and_run_stream(
     parse_and_run_with_data(src, r.get_contiguous())
 }
 
+/// Resource caps for one CLI or library run. Defaults match the shipped engine:
+/// 1000 sessions and a 1 MiB reassembly buffer.
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    pub limits: Limits,
+    pub max_sessions: usize,
+    pub max_reassembly: usize,
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            limits: Limits::default(),
+            max_sessions: 1000,
+            max_reassembly: 1 << 20,
+        }
+    }
+}
+
+fn enforce_reassembly(data: &[u8], max_buffer: usize) -> Result<Vec<u8>, RuntimeError> {
+    let mut reassembler = crate::reassembly::Reassembler::new(0);
+    reassembler.max_buffer = max_buffer;
+    match reassembler.accept_segment(0, data.to_vec()) {
+        Ok(()) => Ok(reassembler.get_contiguous().to_vec()),
+        Err(crate::reassembly::ReassemblyError::Partial { cap, kept, dropped }) => {
+            Err(RuntimeError::Partial { cap, kept, dropped })
+        }
+        Err(err) => Err(RuntimeError::LimitExceeded(format!("reassembly: {err:?}"))),
+    }
+}
+
 /// Run with explicit bytes and the default `Limits`.
 pub fn parse_and_run_with_data(
     src: &str,
@@ -273,6 +304,23 @@ pub fn parse_and_run_with_data_and_limits(
     data: &[u8],
     limits: Limits,
 ) -> Result<(Protocol, HashMap<String, u64>, String, Vec<Event>), RuntimeError> {
+    let mut options = RunOptions::default();
+    options.limits = limits;
+    parse_and_run_with_options(src, &[data], &options)
+}
+
+/// Run one or more datagrams on a single session table.
+///
+/// Each datagram is bounded by [`RunOptions::max_reassembly`] before the VM
+/// sees it. A drop is [`RuntimeError::Partial`] cap `reassembly`. Message-ref
+/// depth past 16 is cap `max_layer_depth`. A second flow that does not fit the
+/// session table is cap `max_sessions`. None of these is a catalog cause.
+pub fn parse_and_run_with_options(
+    src: &str,
+    packets: &[&[u8]],
+    options: &RunOptions,
+) -> Result<(Protocol, HashMap<String, u64>, String, Vec<Event>), RuntimeError> {
+    let limits = options.limits.clone();
     let mut p = Parser::new(src);
     let proto = p.parse_protocol().map_err(RuntimeError::from)?;
 
@@ -373,98 +421,109 @@ pub fn parse_and_run_with_data_and_limits(
     };
 
     let (program, field_map) = protocol_to_bytecode_with_map(&temp_proto);
-    let mut vm = BytecodeVm::with_limits(program.slot_count, limits.clone());
-    vm.load_input(data);
-    finish_datagram(vm.run(&program)?)?;
-
-    let mut ctx: HashMap<String, u64> = HashMap::new();
-    for (name, &s) in &field_map {
-        // Include all (including qualified from MessageRef inlining) so nested fields are in ctx,
-        // but only slots the VM actually wrote — compile-time unrolling registers phantom slots
-        // for recursion levels the data never reached (e.g. diameter grouped AVPs at depth > 1).
-        if vm.slot_touched(s) {
-            ctx.insert(name.clone(), vm.get_slot(s));
-        }
-    }
-
-    ctx.insert("__current_offset".to_string(), vm.current_offset() as u64);
-
-    // Note: `let` bindings (e.g. `attrs_len`, `start_offset`) are emitted by the
-    // bytecode and appear in `field_map` / `ctx` above — no protocol-specific
-    // post-processing is needed (the previous `attrs_len = length - 20` hack was
-    // removed; let-snapshotting handles it generically).
-
-    // Resource limit on context size (from Limits)
-    if ctx.len() > 1024 {
-        // keep simple for now, or extend Limits
-        return Err(RuntimeError::LimitExceeded(format!(
-            "context too large: {} entries",
-            ctx.len()
-        )));
-    }
-
-    let mut fsm = FsmEngine::new(1000);
+    let mut fsm = FsmEngine::new(options.max_sessions);
     fsm.load_from_ast(&proto.state_machines);
-
     let key_expr = proto.state_machines.first().and_then(|sm| sm.key.clone());
-    let key = compute_flow_key(&key_expr, &ctx);
-    let (final_state, fsm_evs) = fsm.feed(key.clone(), &root_msg, &ctx);
-    if let Some(cov) = fsm.coverage {
-        return Err(RuntimeError::Partial {
-            cap: cov.cap,
-            kept: cov.kept,
-            dropped: cov.dropped,
-        });
-    }
 
-    // Merge per-flow variables (from Set actions) into returned ctx
-    if let Some(vars) = fsm.get_variables(&key) {
-        for (k, v) in vars {
-            ctx.insert(k.clone(), *v);
-        }
-    }
+    let mut last_ctx: HashMap<String, u64> = HashMap::new();
+    let mut last_state = String::new();
+    let mut last_evs = Vec::new();
 
-    // Always emit a Message-dispatch event first so callers can observe which
-    // message was parsed even when the protocol has no state machine.
-    let mut evs = Vec::with_capacity(fsm_evs.len() + 1);
-    evs.push(Event::Message {
-        msg_type: root_msg.clone(),
-        size: data.len(),
-    });
-    evs.extend(fsm_evs);
+    for packet in packets {
+        let data = enforce_reassembly(packet, options.max_reassembly)?;
+        let mut vm = BytecodeVm::with_limits(program.slot_count, limits.clone());
+        vm.load_input(&data);
+        finish_datagram(vm.run(&program)?)?;
 
-    // Layered `bind` dispatch (C7): if the root message binds a payload field to
-    // an in-protocol layer message and the `when` condition holds, sub-parse that
-    // layer from the payload tail and merge its fields under `<layer>.<name>`.
-    // Binds referencing external (not-in-protocol) layers are declarations only.
-    for b in &proto.binds {
-        if b.source != root_msg {
-            continue;
-        }
-        if crate::integration::eval_expr(&b.when, &ctx) == 0 {
-            continue;
-        }
-        let in_protocol = proto.messages.iter().any(|m| m.name == b.layer);
-        if !in_protocol {
-            continue;
-        }
-        let payload_start = vm
-            .rest_starts()
-            .iter()
-            .find(|(n, _)| n == &b.field)
-            .map(|(_, off)| *off);
-        if let Some(start) = payload_start
-            && let Ok((layer_ctx, layer_evs)) =
-                run_layer(&proto, &b.layer, &data[start..], limits.clone())
-        {
-            for (k, v) in layer_ctx {
-                ctx.insert(format!("{}.{}", b.layer, k), v);
+        let mut ctx: HashMap<String, u64> = HashMap::new();
+        for (name, &s) in &field_map {
+            // Include all (including qualified from MessageRef inlining) so nested fields are in ctx,
+            // but only slots the VM actually wrote — compile-time unrolling registers phantom slots
+            // for recursion levels the data never reached (e.g. diameter grouped AVPs at depth > 1).
+            if vm.slot_touched(s) {
+                ctx.insert(name.clone(), vm.get_slot(s));
             }
-            evs.extend(layer_evs);
         }
+
+        ctx.insert("__current_offset".to_string(), vm.current_offset() as u64);
+
+        // Note: `let` bindings (e.g. `attrs_len`, `start_offset`) are emitted by the
+        // bytecode and appear in `field_map` / `ctx` above — no protocol-specific
+        // post-processing is needed (the previous `attrs_len = length - 20` hack was
+        // removed; let-snapshotting handles it generically).
+
+        // Resource limit on context size (from Limits)
+        if ctx.len() > 1024 {
+            // keep simple for now, or extend Limits
+            return Err(RuntimeError::LimitExceeded(format!(
+                "context too large: {} entries",
+                ctx.len()
+            )));
+        }
+
+        let key = compute_flow_key(&key_expr, &ctx);
+        let (final_state, fsm_evs) = fsm.feed(key.clone(), &root_msg, &ctx);
+        if let Some(cov) = fsm.coverage {
+            return Err(RuntimeError::Partial {
+                cap: cov.cap,
+                kept: cov.kept,
+                dropped: cov.dropped,
+            });
+        }
+
+        // Merge per-flow variables (from Set actions) into returned ctx
+        if let Some(vars) = fsm.get_variables(&key) {
+            for (k, v) in vars {
+                ctx.insert(k.clone(), *v);
+            }
+        }
+
+        // Always emit a Message-dispatch event first so callers can observe which
+        // message was parsed even when the protocol has no state machine.
+        let mut evs = Vec::with_capacity(fsm_evs.len() + 1);
+        evs.push(Event::Message {
+            msg_type: root_msg.clone(),
+            size: data.len(),
+        });
+        evs.extend(fsm_evs);
+
+        // Layered `bind` dispatch (C7): if the root message binds a payload field to
+        // an in-protocol layer message and the `when` condition holds, sub-parse that
+        // layer from the payload tail and merge its fields under `<layer>.<name>`.
+        // Binds referencing external (not-in-protocol) layers are declarations only.
+        for b in &proto.binds {
+            if b.source != root_msg {
+                continue;
+            }
+            if crate::integration::eval_expr(&b.when, &ctx) == 0 {
+                continue;
+            }
+            let in_protocol = proto.messages.iter().any(|m| m.name == b.layer);
+            if !in_protocol {
+                continue;
+            }
+            let payload_start = vm
+                .rest_starts()
+                .iter()
+                .find(|(n, _)| n == &b.field)
+                .map(|(_, off)| *off);
+            if let Some(start) = payload_start
+                && let Ok((layer_ctx, layer_evs)) =
+                    run_layer(&proto, &b.layer, &data[start..], limits.clone())
+            {
+                for (k, v) in layer_ctx {
+                    ctx.insert(format!("{}.{}", b.layer, k), v);
+                }
+                evs.extend(layer_evs);
+            }
+        }
+
+        last_ctx = ctx;
+        last_state = final_state;
+        last_evs = evs;
     }
 
-    Ok((proto, ctx, final_state, evs))
+    Ok((proto, last_ctx, last_state, last_evs))
 }
 
 #[cfg(test)]

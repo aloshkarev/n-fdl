@@ -183,7 +183,7 @@ fn usage() {
         "Usage:\n  \
          nfdl-cli <file>                      parse + summary (default)\n  \
          nfdl-cli parse <file>                parse + summary\n  \
-         nfdl-cli run <file> --hex <hex>      parse + run with hex bytes\n  \
+         nfdl-cli run <file> --hex <hex> [--hex <hex>...]  parse + run\n  \
          nfdl-cli validate <file>             parse + verify bounds diagnostics\n  \
          nfdl-cli dump <file>                 parse + dump bytecode program"
     );
@@ -291,47 +291,50 @@ fn cmd_parse(path: &str) -> i32 {
     }
 }
 
-fn cmd_run(path: &str, hex: &str, max_instr: Option<usize>) {
+/// Run a protocol file. Returns the process status and the stdout line or
+/// report. Does not exit the process. Empty bytes are `coverage=absent`.
+fn cmd_run(path: &str, hexes: &[String], options: nfdl_runtime::RunOptions) -> (i32, String) {
     let src = fs::read_to_string(path).expect("read file");
-    let data = match parse_hex(hex) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("invalid --hex: {e}");
-            std::process::exit(2);
+    let mut packets = Vec::with_capacity(hexes.len());
+    for hex in hexes {
+        match parse_hex(hex) {
+            Ok(bytes) => packets.push(bytes),
+            Err(e) => {
+                eprintln!("invalid --hex: {e}");
+                return (2, String::new());
+            }
         }
-    };
-    let limits = match max_instr {
-        Some(n) => nfdl_runtime::Limits {
-            max_instructions: n,
-            max_loop_iterations: (n / 10).max(1000),
-        },
-        None => nfdl_runtime::Limits::default(),
-    };
-    match nfdl_runtime::parse_and_run_with_data_and_limits(&src, &data, limits) {
+    }
+    if packets.is_empty() || packets.iter().all(|packet| packet.is_empty()) {
+        return (1, "coverage=absent".to_string());
+    }
+    let views: Vec<&[u8]> = packets.iter().map(Vec::as_slice).collect();
+    match nfdl_runtime::parse_and_run_with_options(&src, &views, &options) {
         Ok((_proto, ctx, final_state, evs)) => {
-            println!("coverage=complete");
-            println!(
-                "run: {} bytes, final_state={}, events={}",
-                data.len(),
-                final_state,
-                evs.len()
-            );
+            let nbytes: usize = packets.iter().map(Vec::len).sum();
+            let mut lines = vec![
+                "coverage=complete".to_string(),
+                format!(
+                    "run: {nbytes} bytes, final_state={final_state}, events={}",
+                    evs.len()
+                ),
+            ];
             let mut keys: Vec<&String> = ctx.keys().collect();
             keys.sort();
             for k in keys {
-                println!("  {} = {}", k, ctx[k]);
+                lines.push(format!("  {k} = {}", ctx[k]));
             }
             for e in &evs {
-                println!("  event: {:?}", e);
+                lines.push(format!("  event: {e:?}"));
             }
+            (0, lines.join("\n"))
         }
         Err(e) => {
             if let Some(line) = partial_line(&e) {
-                println!("{line}");
-                std::process::exit(1);
+                return (1, line);
             }
             eprintln!("runtime error: {e}");
-            std::process::exit(3);
+            (3, String::new())
         }
     }
 }
@@ -403,13 +406,24 @@ fn main() {
             std::process::exit(cmd_parse(&args[2]));
         }
         "run" => {
-            // run <file> --hex <hex> [--max-instructions N]
+            // run <file> --hex <hex> [--hex <hex>...] [--max-instructions N]
             let path = args.get(2).cloned();
-            let hex = flag_value(&args[3..], "--hex");
+            let hexes = flag_values(&args[3..], "--hex");
             let max_instr =
                 flag_value(&args[3..], "--max-instructions").and_then(|s| s.parse::<usize>().ok());
-            match (path, hex) {
-                (Some(p), Some(h)) => cmd_run(&p, &h, max_instr),
+            let mut options = nfdl_runtime::RunOptions::default();
+            if let Some(n) = max_instr {
+                options.limits.max_instructions = n;
+                options.limits.max_loop_iterations = (n / 10).max(1000);
+            }
+            match path {
+                Some(p) if !hexes.is_empty() => {
+                    let (code, text) = cmd_run(&p, &hexes, options);
+                    if !text.is_empty() {
+                        println!("{text}");
+                    }
+                    std::process::exit(code);
+                }
                 _ => {
                     usage();
                     std::process::exit(1);
@@ -443,11 +457,145 @@ fn main() {
 
 /// Read the value of `--flag` from an args slice (returns the following arg).
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    flag_values(args, flag).into_iter().next()
+}
+
+/// Read every value of a repeated `--flag`.
+fn flag_values(args: &[String], flag: &str) -> Vec<String> {
+    let mut values = Vec::new();
     let mut iter = args.iter();
-    while let Some(a) = iter.next() {
-        if a == flag {
-            return iter.next().cloned();
+    while let Some(arg) = iter.next() {
+        if arg == flag
+            && let Some(value) = iter.next()
+        {
+            values.push(value.clone());
         }
     }
-    None
+    values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_nfdl(label: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("nfdl-cli-{label}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("proto.nfdl");
+        std::fs::write(&path, body).expect("write proto");
+        (dir, path)
+    }
+
+    fn assert_only_line(status: i32, text: &str, line: &str) {
+        assert_eq!(status, 1, "{text}");
+        assert_eq!(text, line);
+        assert!(!text.contains("coverage=complete"));
+        assert!(!text.contains("N-FDL v1 SUCCESS"));
+        assert!(!text.contains("run:"));
+        assert!(!text.contains("event:"));
+    }
+
+    #[test]
+    fn empty_hex_is_coverage_absent() {
+        let (dir, path) = write_nfdl("empty-read", "protocol P {\n  message M { b: u8; }\n}\n");
+        let (status, text) = cmd_run(
+            path.to_str().expect("utf8"),
+            &[String::new()],
+            nfdl_runtime::RunOptions::default(),
+        );
+        assert_eq!(status, 1);
+        assert_eq!(text, "coverage=absent");
+        let _ = std::fs::remove_dir_all(dir);
+
+        let (dir, path) = write_nfdl("empty-noread", "protocol P {\n  message M { }\n}\n");
+        let (status, text) = cmd_run(
+            path.to_str().expect("utf8"),
+            &[String::new()],
+            nfdl_runtime::RunOptions::default(),
+        );
+        assert_eq!(status, 1);
+        assert_eq!(text, "coverage=absent");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn depth_past_16_is_partial_on_the_run_entry() {
+        let (dir, path) = write_nfdl(
+            "depth",
+            "protocol Deep {\n  message Node { inner: Node; }\n}\n",
+        );
+        let (status, text) = cmd_run(
+            path.to_str().expect("utf8"),
+            &["00".to_string()],
+            nfdl_runtime::RunOptions::default(),
+        );
+        assert_only_line(
+            status,
+            &text,
+            "coverage=partial cap=max_layer_depth kept=16 dropped=1",
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reassembly_drop_is_partial_on_the_run_entry() {
+        let (dir, path) = write_nfdl("reassembly", "protocol P {\n  message M { b: u8; }\n}\n");
+        let mut options = nfdl_runtime::RunOptions::default();
+        options.max_reassembly = 1;
+        let (status, text) = cmd_run(path.to_str().expect("utf8"), &["0102".to_string()], options);
+        assert_only_line(
+            status,
+            &text,
+            "coverage=partial cap=reassembly kept=0 dropped=2",
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_eviction_is_partial_on_the_run_entry() {
+        let (dir, path) = write_nfdl(
+            "sessions",
+            "protocol Sess {\n  \
+             message M { id: u8; }\n  \
+             state_machine Flow {\n    \
+             key = bidir(id, 0);\n    \
+             state CLOSED {\n      \
+             on M -> CLOSED;\n    \
+             }\n  \
+             }\n}\n",
+        );
+        let mut options = nfdl_runtime::RunOptions::default();
+        options.max_sessions = 1;
+        let (status, text) = cmd_run(
+            path.to_str().expect("utf8"),
+            &["01".to_string(), "02".to_string()],
+            options,
+        );
+        assert_only_line(
+            status,
+            &text,
+            "coverage=partial cap=max_sessions kept=1 dropped=1",
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn consumed_buffer_is_coverage_complete() {
+        let (dir, path) = write_nfdl("complete", "protocol P {\n  message M { b: u8; }\n}\n");
+        let (status, text) = cmd_run(
+            path.to_str().expect("utf8"),
+            &["01".to_string()],
+            nfdl_runtime::RunOptions::default(),
+        );
+        assert_eq!(status, 0, "{text}");
+        assert!(text.starts_with("coverage=complete\n"), "{text}");
+        assert!(text.contains("run: 1 bytes"), "{text}");
+        assert!(text.contains("b = 1"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

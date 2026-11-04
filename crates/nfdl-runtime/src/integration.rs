@@ -351,14 +351,14 @@ fn emit_field_bytecode(
     depth: usize,
     little_endian: bool,
 ) {
-    const MAX_REF_DEPTH: usize = 8; // TODO: wire from Limits in runner
-    if depth > MAX_REF_DEPTH {
-        // Stop inlining to prevent stack overflow / resource exhaustion on bad refs
-        instructions.push(Instruction::ReadU8 { slot: *slot });
-        instructions.push(Instruction::UpdateOffset {
-            slot: current_offset_slot,
+    // Root is depth 0. Depths 0..=15 are the 16 layers that may be decoded.
+    // The next layer is `max_layer_depth`: partial coverage, not a one-byte read.
+    const MAX_LAYER_DEPTH: usize = 16;
+    if depth >= MAX_LAYER_DEPTH {
+        instructions.push(Instruction::LayerLimit {
+            kept: MAX_LAYER_DEPTH,
+            dropped: 1,
         });
-        *slot += 1;
         return;
     }
     let full_name = if name_prefix.is_empty() {

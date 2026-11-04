@@ -210,6 +210,12 @@ pub enum Instruction {
         cond_slot: u16,
         target: u16,
     },
+    /// Another layer would pass `max_layer_depth`. The slot is not written and
+    /// the cursor does not advance. This is partial coverage, not a stored zero.
+    LayerLimit {
+        kept: usize,
+        dropped: usize,
+    },
     Return,
 }
 
@@ -233,7 +239,7 @@ pub struct BytecodeVm {
     /// so the runner can sub-dispatch a bound layer message from the payload tail.
     rest_starts: Vec<(String, usize)>,
     /// Per-slot "was written at runtime" flag. Compile-time `MessageRef` inlining
-    /// (bounded by `MAX_REF_DEPTH`) registers slots for every unrolled recursion
+    /// (bounded by `max_layer_depth`, 16) registers slots for every unrolled recursion
     /// level, but only the levels actually reached by the data execute. The
     /// runner uses this to exclude phantom nested fields/lets from the output
     /// context (e.g. diameter's `avps.a.grouped.inner.*` when no grouped AVP ran).
@@ -749,6 +755,13 @@ impl BytecodeVm {
                         ip += 1;
                     }
                 }
+                Instruction::LayerLimit { kept, dropped } => {
+                    return Ok(StreamOutcome::Truncated(ShortRead {
+                        cap: "max_layer_depth",
+                        kept: *kept,
+                        dropped: *dropped,
+                    }));
+                }
                 Instruction::Return => {
                     return Ok(StreamOutcome::Complete);
                 }
@@ -958,6 +971,30 @@ mod tests {
             })
         );
         assert!(!vm.slot_touched(1));
+        assert_eq!(vm.current_offset(), 0);
+    }
+
+    #[test]
+    fn layer_limit_does_not_store_a_zero() {
+        let program = BytecodeProgram {
+            instructions: vec![Instruction::LayerLimit {
+                kept: 16,
+                dropped: 1,
+            }],
+            slot_count: 1,
+        };
+        let mut vm = BytecodeVm::new(1);
+        vm.load_input(&[0xAB]);
+        assert_eq!(
+            vm.run(&program).unwrap(),
+            DatagramOutcome::Partial(ShortRead {
+                cap: "max_layer_depth",
+                kept: 16,
+                dropped: 1,
+            })
+        );
+        assert!(!vm.slot_touched(0));
+        assert_eq!(vm.get_slot(0), 0);
         assert_eq!(vm.current_offset(), 0);
     }
 }
