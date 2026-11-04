@@ -1,4 +1,4 @@
-//! Wi-Fi W0 cause/problem pairs (85 isolated SARIF-ID bijection).
+//! Wi-Fi W0 cause/problem pairs (86 isolated SARIF-ID bijection).
 //! [`WIFI_MAPPINGS`] is the sole row-level source of truth.
 
 use crate::helpers::{cause, problem};
@@ -18,7 +18,7 @@ pub struct WifiMapping {
     pub scope: ScopeType,
 }
 
-/// Canonical W0 table (85 rows).
+/// Canonical W0 table (86 rows).
 pub const WIFI_MAPPINGS: &[WifiMapping] = &[
     WifiMapping {
         problem_kind: "WifiApBeaconLoss",
@@ -168,6 +168,12 @@ pub const WIFI_MAPPINGS: &[WifiMapping] = &[
         problem_kind: "WifiApQbssOverload",
         cause_kind: "WifiApQbssOverloadSignal",
         sarif_id: "wifi_ap_qbss_overload",
+        scope: ScopeType::AccessPoint,
+    },
+    WifiMapping {
+        problem_kind: "WifiApAirtimeOverload",
+        cause_kind: "WifiApAirtimeOverloadSignal",
+        sarif_id: "wifi_ap_airtime_overload",
         scope: ScopeType::AccessPoint,
     },
     WifiMapping {

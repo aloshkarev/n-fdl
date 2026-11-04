@@ -531,5 +531,7 @@ pub(crate) fn all_events() -> Box<[EventSchema]> {
     ]
     .into_iter()
     .chain(wifi::wifi_events())
+    .chain(crate::dependencies::dependency_event_schemas())
+    .chain(crate::wmg::wmg_events())
     .collect()
 }

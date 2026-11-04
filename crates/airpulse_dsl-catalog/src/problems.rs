@@ -419,8 +419,15 @@ pub(crate) fn all_problems() -> Box<[ProblemSchema]> {
             "udp_heavy_chatter",
             None,
         ),
+        problem(
+            "DependencyExplains",
+            &[ScopeType::Session],
+            "dependency_explains",
+            Some(Severity::High),
+        ),
     ]
     .into_iter()
     .chain(wifi::wifi_problems())
+    .chain(crate::wmg::wmg_problems())
     .collect()
 }

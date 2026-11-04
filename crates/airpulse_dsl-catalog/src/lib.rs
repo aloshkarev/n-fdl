@@ -8,10 +8,14 @@
 #![warn(missing_docs)]
 
 mod causes;
+mod dependencies;
 mod events;
 mod helpers;
 mod problems;
 mod wifi;
+mod wmg;
+
+pub use dependencies::{DEPENDENCY_EDGES, DependencyEdgeSpec};
 
 use std::sync::LazyLock;
 
@@ -286,6 +290,7 @@ static CAPABILITIES: LazyLock<Box<[Capability]>> = LazyLock::new(|| {
         Capability::new("topology"),
         Capability::new("wifi-ota"),
         Capability::new("radio-nemo"),
+        Capability::new("gtpu-unwrap"),
     ])
 });
 
@@ -348,7 +353,7 @@ pub const PROBLEM_FIELD_TARGET: FieldIdx = FieldIdx(0);
 /// `p.time` field index in the catalog Problem schema (`04` §6.2).
 pub const PROBLEM_FIELD_TIME: FieldIdx = FieldIdx(1);
 
-/// Returns the canonical W0 Wi-Fi mapping table (85 rows).
+/// Returns the canonical W0 Wi-Fi mapping table (86 rows).
 #[must_use]
 pub fn wifi_w0_mappings() -> &'static [wifi::WifiMapping] {
     wifi::WIFI_MAPPINGS

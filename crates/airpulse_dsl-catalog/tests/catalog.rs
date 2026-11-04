@@ -278,18 +278,18 @@ fn resolves_protocol_per_rule_causes() {
 fn catalog_entry_counts_match_legacy_parity_contract() {
     assert_eq!(
         event_count(),
-        77,
-        "expected 44 base + 30 bounded v1.3 Wi-Fi/cross-layer events + 2 radio events + 1 udp summary"
+        122,
+        "expected 44 base + 30 bounded v1.3 Wi-Fi/cross-layer events + 2 radio events + 1 udp summary + 34 dependency problem events + 11 WMG events"
     );
     assert_eq!(
         cause_count(),
-        159,
-        "expected 59 base + 85 v1.3 Wi-Fi per-rule causes + 7 cellular + 6 eth + 2 udp causes"
+        237,
+        "expected 59 base + 86 v1.3 Wi-Fi per-rule causes + 7 cellular + 6 eth + 2 udp causes + 62 dependency edges + 15 WMG causes"
     );
     assert_eq!(
         problem_count(),
-        158,
-        "expected 58 base + 85 v1.3 Wi-Fi problems + 7 cellular + 6 eth + 2 udp problems"
+        175,
+        "expected 58 base + 86 v1.3 Wi-Fi problems + 7 cellular + 6 eth + 2 udp problems + DependencyExplains + 15 WMG problems"
     );
 }
 
@@ -405,7 +405,7 @@ fn exposes_catalog_metadata_and_kind_tables() {
     );
 
     assert!(capability_for("topology").is_some());
-    assert_eq!(capabilities().len(), 4);
+    assert_eq!(capabilities().len(), 5);
 }
 
 #[test]
@@ -501,10 +501,10 @@ fn protocol_summary_events_resolve_global_scope() {
 #[test]
 fn wifi_w0_catalog_bijection_and_legacy_stability() {
     let mappings = wifi_w0_mappings();
-    assert_eq!(mappings.len(), 85);
+    assert_eq!(mappings.len(), 86);
     let sarif_ids: Vec<&str> = mappings.iter().map(|m| m.sarif_id).collect();
     let unique: std::collections::BTreeSet<&str> = sarif_ids.iter().copied().collect();
-    assert_eq!(unique.len(), 85, "sarif ids must be unique");
+    assert_eq!(unique.len(), 86, "sarif ids must be unique");
 
     for row in mappings {
         let problem = resolve_problem(row.problem_kind).unwrap_or_else(|| {
@@ -768,7 +768,7 @@ fn w1_cross_layer_paths_resolve_with_append_only_indices() {
     let ap = resolve_event("wifi.ap.summary").expect("AP summary");
     assert_eq!(
         ap.fields.last().expect("AP fields").name,
-        "peak_rts_max_gap_ms"
+        "peak_worst_rssi_dbm"
     );
     let client = resolve_event("wifi.client.summary").expect("client summary");
     assert_eq!(

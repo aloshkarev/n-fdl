@@ -149,5 +149,7 @@ pub(crate) fn all_causes() -> Box<[CauseSchema]> {
     ]
     .into_iter()
     .chain(wifi::wifi_causes())
+    .chain(crate::dependencies::dependency_cause_schemas())
+    .chain(crate::wmg::wmg_causes())
     .collect()
 }
