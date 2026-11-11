@@ -4,6 +4,9 @@
 
 ## ADR-001 — Execution model
 
+- **Status:** Accepted
+- **Date:** 2026-06-25
+
 **Options**
 - Bytecode VM (интерпретатор верифицированного IR)
 - Rust codegen (AOT генерация нативного кода)
@@ -22,7 +25,7 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 
 ---
 
-## ADR-002 — Surface Syntax v1: Corrections (C1–C8)
+## ADR-002 — Surface Syntax v1: Corrections (C1–C10)
 
 **Детальный ADR:** [ADR-002-surface-syntax-corrections.md](ADR-002-surface-syntax-corrections.md)
 (Status: Accepted, 2026-06-25; supersedes original syntax sketch in project brief §4/§6).
@@ -45,13 +48,17 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 - **C7** — рекурсивная инкапсуляция: циклы в bind-графе разрешены, runtime
   ограничено `max_layer_depth` + payload-shrink invariant.
 - **C8** — `__current_offset` (локальное) vs `__root_offset` (абсолютное).
+- **C10** — atomic endpoint key normalization via `bidir_tuple` (расширение C4;
+  см. ADR-002 §C10, ADR-008).
 
-> Решение по `let`-мутации/`carry` (C2) ранее занимало этот слот как
-> самостоятельная запись списка; теперь оно — секция C2 детального ADR-002.
+> C9 — ADR-009 (plugin records). C10 — ADR-002 §C10 + ADR-008 (endpoint keys).
 
 ---
 
 ## ADR-003 — Bounds verification backend (C5)
+
+- **Status:** Accepted
+- **Date:** 2026-06-25
 
 **Options**
 - Z3-mandatory в v1
@@ -68,6 +75,9 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 ---
 
 ## ADR-004 — Zero-copy buffer model
+
+- **Status:** Accepted
+- **Date:** 2026-06-25
 
 **Options**
 - Только `&'pkt [u8]` (borrowed)
@@ -87,6 +97,9 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 
 ## ADR-005 — Concurrency model
 
+- **Status:** Accepted
+- **Date:** 2026-06-25
+
 **Options**
 - Single-threaded event loop
 - Sharded (per-flow-hash)
@@ -104,6 +117,9 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 
 ## ADR-006 — `match` result typing (C6)
 
+- **Status:** Accepted
+- **Date:** 2026-06-25
+
 **Options**
 - Только общий layout во всех ветках
 - Tagged union (разные layout)
@@ -118,6 +134,9 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 ---
 
 ## ADR-007 — Bitfield alignment
+
+- **Status:** Accepted
+- **Date:** 2026-06-25
 
 **Options**
 - Разрешить misalignment (неявное padding)
@@ -134,6 +153,9 @@ Codegen/JIT выигрывают perf, но проигрывают по глав
 ---
 
 ## ADR-008 — Session key normalization (C4/C10)
+
+- **Status:** Accepted
+- **Date:** 2026-06-25
 
 **Options**
 - Literal key (как в исходных примерах)
@@ -170,6 +192,9 @@ endpoint keys + опциональная directionality.
 
 ## ADR-010 — Plugin isolation v1
 
+- **Status:** Accepted
+- **Date:** 2026-06-25
+
 **Options**
 - Trusted in-process (текущий)
 - Worker-thread + hard-timeout
@@ -187,6 +212,9 @@ endpoint keys + опциональная directionality.
 
 ## ADR-011 — Reassembly overlap policy
 
+- **Status:** Accepted
+- **Date:** 2026-06-25
+
 **Options**
 - first-wins
 - last-wins
@@ -201,6 +229,9 @@ endpoint keys + опциональная directionality.
 ---
 
 ## ADR-012 — ProgramImage serialization
+
+- **Status:** Accepted
+- **Date:** 2026-06-25
 
 **Options**
 - In-memory only
@@ -220,7 +251,7 @@ endpoint keys + опциональная directionality.
 ## Итог
 
 Детальные ADR (отдельные файлы):
-- **ADR-002** — Surface Syntax v1: Corrections (C1–C8) → `ADR-002-surface-syntax-corrections.md`
+- **ADR-002** — Surface Syntax v1: Corrections (C1–C10) → `ADR-002-surface-syntax-corrections.md`
 - **ADR-009** — Record Types for Plugin Results (C9) → `ADR-009-plugin-record-types.md`
 
 Inline-резюме в этом документе: ADR-001, ADR-003–008, ADR-010–012.

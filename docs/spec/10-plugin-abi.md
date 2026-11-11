@@ -211,6 +211,23 @@ compression-loop DoS. `wire_len` фиксируется на on-wire длине 
 
 Решает Known Gap «EOF/pattern-bound messages» (HTTP/1.x line framing).
 
+**Manifest (M1 reference):**
+
+```toml
+name = "scan_crlf"
+abi_version = 1
+purity = "pure"
+args = [
+  { name = "root", type = "opaque" },
+  { name = "root_offset", type = "u64" },
+  { name = "limit", type = "u16" },
+]
+ret = { kind = "record", fields = [
+  { name = "found", type = "bool" },
+  { name = "line_len", type = "u16" },
+]}
+```
+
 ```
 вход:  root, root_offset, limit (макс. сколько сканировать)
 выход: record{ found: bool, line_len: u16 }    # длина до и включая CRLF

@@ -91,4 +91,4 @@ tests/golden/
 
 - M0 (ARP): golden ARP + conservation + no-panic + deterministic.
 - M4 (TCP stream): resume-equivalence + reassembly properties + differential на TCP-корпусе.
-- M6: differential ≥95%, 0 новых паник за 24h fuzzing, все DoS-векторы §12 покрыты property-тестами.
+- M6: differential ≥95%, 0 новых паник за 24h fuzzing, все DoS-векторы из [dos-vectors.md](../plans/dos-vectors.md) покрыты property-тестами.

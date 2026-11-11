@@ -33,12 +33,13 @@ protocol DNS {
     // OPEN DESIGN POINT (tracked): a compressed DNS name both (a) yields a
     // string and (b) consumes a variable number of on-wire bytes in the LOCAL
     // stream. Per semantics §3.6 invoke() does NOT advance the local offset.
-    // Resolution for v1: dns_decompress returns a struct { name: str, wire_len: u16 }
+    // Resolution for v1: dns_decompress returns record{ name: str, wire_len: u16 }
     // and the consumed length is applied via a following dependent skip field.
     // Surface form below makes the consumption explicit and DAG-visible.
     message Query {
-        let dec   = invoke("dns_decompress", __root_buffer, __root_offset); // {name,wire_len}
-        qname:    bytes[dec.wire_len];   // consume the on-wire encoded name (zero-copy)
+        let dec   = invoke("dns_decompress", __root_buffer, __root_offset); // record{name,wire_len}
+        let qname_decoded = dec.name;          // decoded str (C9 record field access)
+        qname_wire: bytes[dec.wire_len];       // on-wire skip (zero-copy slice)
         qtype:    u16;
         qclass:   u16;
     }

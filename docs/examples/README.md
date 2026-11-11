@@ -16,7 +16,7 @@ This is the single source of truth for examples.
 ## Mapping: example → spec / ADR / milestone / support
 
 `Support` reflects the **current implementation** after the Phase 2–4 fixes
-(audit 2026-06, see `docs/plans/spec-correctness-blockers-2026-06.md`). `parse=ok`
+(audit 2026-06, see [`docs/plans/correctness-refinements.md`](../plans/correctness-refinements.md)). `parse=ok`
 means `nfdl-cli parse` returns SUCCESS with a correct AST; `run=ok` means
 `nfdl-cli run <file> --hex <hex>` executes the root message end-to-end. The legacy
 `nfdl-cli <file>` (no `--hex`) path feeds a hardcoded RADIUS sample to every
@@ -34,7 +34,7 @@ not by bug** — use `run --hex` with a real packet.
 
 ## Remaining gaps (after Phase 2–4)
 
-Tracked in `docs/plans/spec-correctness-blockers-2026-06.md` and `PRODUCTION_CHECKLIST.md`:
+Tracked in [`docs/plans/correctness-refinements.md`](../plans/correctness-refinements.md) (Open items):
 
 - **`invoke("…")` / plugin ABI** — `udp_dns` references `invoke("dns_decompress")`; not
   implemented (M1 roadmap). The `invoke` call parses structurally; the plugin record result
@@ -65,10 +65,10 @@ cargo run -p nfdl-cli -- dump     docs/examples/arp.nfdl
 Four end-to-end correctness fixes landed while running the example suite, with
 regression tests in `crates/nfdl-runtime/tests/phase5_finalization.rs`:
 
-- **EFSM initial state** — a fresh flow now starts at the machine's declared
-  `initial` state (e.g. TCP `CLOSED`), not the generic `IDLE`; the TCP
-  `Connection` FSM now transitions `CLOSED → SYN_SENT` and emits `TCP_SYN_SEEN`
-  on a SYN segment.
+- **EFSM initial state** — a fresh flow starts at the machine's **first declared**
+  `state` block (convention: list initial state first, e.g. TCP `CLOSED` before
+  `SYN_SENT`); the TCP `Connection` FSM transitions `CLOSED → SYN_SENT` and emits
+  `TCP_SYN_SEEN` on a SYN segment. Explicit `initial` keyword — v1.5 candidate.
 - **`MessageRef` lexical scoping** — `var_slots` is snapshot/restored around
   each `MessageRef` inlining, so a `let` binding in a recursively-inlined
   message (diameter grouped AVP) no longer leaks to a sibling `match` arm.

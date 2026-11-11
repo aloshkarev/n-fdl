@@ -14,6 +14,7 @@ flow-sensitive по условным полям. Цель: статически 
    | bool
    | bitfield{k}                                 // 1 ≤ k ≤ 64; value-type uN (см. §3)
    | bytes[e] | bytes[..] | bytes[EOF] | bytes[stream] // Slice or chunk stream
+   | stream_bytes                                 // type of bytes[stream] sink (no AST value)
    | str                                          // owned, только результат invoke
    | opaque                                       // непрозрачный handle (root_buffer, plugin state)
    | Option[τ]                                    // условное поле  (field: τ if c)
@@ -172,7 +173,7 @@ union под её тегом. Поля до/после match — общие, в 
 Для обратной совместимости human-readable вывод может отображать `name.items`
 как `name`, но Typed AST и verifier обязаны хранить carries явно.
 
-### 5.6.1 session projection
+### 5.7 session projection
 
 ```
 (T-SessionProj)  declared_session_var(k) : τ
@@ -184,7 +185,7 @@ union под её тегом. Поля до/после match — общие, в 
 Projection read-only и запрещён в выражениях, определяющих форму разбора
 (`if`, `while`, `match`, `bytes[e]`, `key`, `bind when`).
 
-### 5.7 invoke → record / скаляр (ADR-009/C9)
+### 5.8 invoke → record / скаляр (ADR-009/C9)
 
 ```
 (T-Invoke) manifest(p) = { args: (a1..an), ret: τ_r, purity }
@@ -201,7 +202,7 @@ Projection read-only и запрещён в выражениях, определ
 полю record → `TypeError::NoSuchField`. Arity/type mismatch с манифестом →
 `TypeError::PluginSignature`.
 
-### 5.8 qualified parent access (C3)
+### 5.9 qualified parent access (C3)
 
 ```
 (T-Qual)   layer-graph гарантирует Proto в стеке на всех путях к текущему msg

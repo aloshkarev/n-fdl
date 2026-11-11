@@ -337,4 +337,28 @@ legacy IDs; один fact-check против authoritative source (`airpulse://r
 о внешних системах; кросс-референсинг внутри docs ≠ верификация против ground
 truth.
 
+---
+
+## Pass 7 (2026-06-30): Regression re-audit + plans drift check
+
+Седьмой проход — delta после Pass 6, pre-implementation refresh. Inventory:
+все `docs/idea/spec/` + `adr/` + `plans/` + 10 examples; cross-check N-FDL audit
+artifacts не сломали shared conventions.
+
+| # | Проверка | Result |
+|---|---|---|
+| P7-1 | Catalog counts (12 events, 8 causes, 6+Amb problems) ↔ migration §6 | consistent |
+| P7-2 | `mutually_exclusive` / KindIdent / semicolon style in 10 examples | no regression |
+| P7-3 | ADR-001..012 Status + cross-refs to spec § | consistent |
+| P7-4 | Legacy sarif_id pattern (PMTUD `l3_pmtud_blackhole`, STP, dot1x) | unchanged since P6-2 |
+| P7-5 | Shared doc conventions with N-FDL (01–13 numbering, C-ID scheme) | aligned |
+
+**External fact-check:** `airpulse://rules` MCP unavailable in cloud agent env;
+legacy-ID claims from Pass 6 retained as verified baseline — re-run MCP locally
+before implementation M0.
+
+**Verdict:** ADGL spec v1 remains **self-consistent, example-valid,
+migration-parity-accurate** (no new defects). N-FDL Pass 1–6 artifacts added under
+[`docs/plans/`](../plans/) without conflicting ADGL correction-ID namespace.
+
 
